@@ -53,6 +53,8 @@ jobs:
       - run: node kit/tools/test_engine.js
       - run: node kit/tools/test_edrive.js
       - run: node kit/tools/test_widget_fixes.js
+      - run: python3 kit/tools/build.py --preview-only bmw_weather
+      - run: node kit/tools/test_bmw_weather.js
       - run: node kit/tools/test_warmup.js
       - run: node kit/tools/test_draggy.js
       - run: node kit/tools/test_brake_test.js

@@ -1,0 +1,36 @@
+{
+  "id": "bmw_weather",
+  "title": "Weather",
+  "description": "Current weather and a five-day forecast, refreshed over the MGU Internet Uplink.",
+  "version": "1.0.0",
+  "mguInternet": true,
+  "vendor": "custom",
+  "loggingId": "OA9W",
+  "iconGlyph": "temp",
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Weather",
+      "buttons": [["BTN_REFRESH", "Refresh"], ["BTN_SETTINGS", "Settings"]]
+    }
+  ],
+  "startWidget": {
+    "comment": "Uses BMW's Drive Recorder home-widget layout and the BackgroundImage1 image cell. Verify the image crop on the target MGU before regular use.",
+    "name": "Weather",
+    "layout": "LT_Table_OnlineApps_DriveRecorderWidget",
+    "image": "BackgroundImage1",
+    "size": [384, 256],
+    "safe": [0.09, 0.10],
+    "cells": {
+      "ErrorInfo": [false, "Bool"],
+      "background": [true, "Bool"],
+      "ProgressbarVisible": [false, "Bool"],
+      "TextRecordings": ["", "Text"]
+    }
+  },
+  "settings": [
+    { "key": "temperatureUnit", "label": "Temperature", "type": "choice", "default": "c", "options": [["c", "Celsius"], ["f", "Fahrenheit"]] },
+    { "key": "refreshMinutes", "label": "Refresh interval", "type": "choice", "default": "30", "options": [["15", "15 minutes"], ["30", "30 minutes"], ["60", "60 minutes"]] }
+  ]
+}
