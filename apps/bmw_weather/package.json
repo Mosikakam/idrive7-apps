@@ -1,5 +1,5 @@
 {
-  "name": "bmw-weather",
+  "name": "bmw_weather",
   "version": "1.0.0",
   "description": "Independent weather widget for BMW MGU / iDrive 7",
   "mguHmi": ["ID7"],
