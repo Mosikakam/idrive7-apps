@@ -545,7 +545,7 @@ async function runInner(impl) {
     let background = null;
     if (impl && impl.background) {
         try {
-            background = await impl.background({ app, log, settings, signals: require('./signals'), spec: SPEC, dataDir: DATA_DIR });
+            background = await impl.background({ app, log, settings, widget, signals: require('./signals'), spec: SPEC, dataDir: DATA_DIR });
         } catch (e) { log.error('background start: ' + (e && e.stack || e)); }
         if (!app.rhmiApplication) { log.info('no screens for this start: running in the background'); return; }
     }

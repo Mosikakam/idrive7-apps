@@ -5,10 +5,12 @@ const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const Module = require('module');
 
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
+assert.strictEqual(pkg.version, '1.0.1');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -52,6 +54,7 @@ https.get = function (url, opts, callback) {
         assert.strictEqual(requests, 1);
         assert.strictEqual(model.snapshot().data.current.temperature_2m, 2);
         assert.strictEqual(model.snapshot().error, '');
+        assert.ok(weather.widgetSummary(model.snapshot()).indexOf('Weather: 2°') === 0);
         const widget = weather.drawWidget(ctx, model.snapshot());
         assert.strictEqual(widget.w, 768);
         assert.strictEqual(widget.h, 512);
@@ -63,7 +66,32 @@ https.get = function (url, opts, callback) {
         await model.refresh();
         assert.strictEqual(model.snapshot().data.current.temperature_2m, 2, 'keep last good forecast');
         assert.strictEqual(model.snapshot().error, 'Weather unavailable');
+        assert.strictEqual(model.snapshot().detail, 'Weather service HTTP 503');
+        assert.ok(weather.widgetSummary(model.snapshot()).indexOf('offline') >= 0);
         weather.drawWidget(ctx, model.snapshot());
+        // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
+        let impl, widgetDraw, calls = 0, cells = [];
+        const mainPath = path.join(__dirname, '..', '..', 'apps', 'bmw_weather', 'main.js');
+        const oldLoad = Module._load;
+        const fakeModel = { updateSettings() {}, refresh() {}, snapshot() { return {}; } };
+        Module._load = function (request, parent) {
+            if (parent && parent.filename === mainPath && request === './kit/mgu')
+                return { run: (entry) => { impl = entry; } };
+            if (parent && parent.filename === mainPath && request === './weather')
+                return { createModel() { calls++; return fakeModel; }, widgetSummary() { return 'Weather: loading'; },
+                    drawWidget() { return { image: true }; }, drawScreen() { return {}; } };
+            return oldLoad.apply(this, arguments);
+        };
+        try { require(mainPath); } finally { Module._load = oldLoad; }
+        const mockWidget = { onChange() {}, loop(fps, fn) { widgetDraw = fn; },
+            set(id, cell, value) { cells.push([id, cell, value]); } };
+        const bg = { settings: { onChange() {} }, widget: mockWidget, log };
+        assert.strictEqual(await impl.background(bg), fakeModel);
+        assert.strictEqual(calls, 1);
+        assert.strictEqual(typeof widgetDraw, 'function');
+        assert.deepStrictEqual(widgetDraw({ spawnId: 3 }), { image: true });
+        assert.deepStrictEqual(cells, [[3, 'TextRecordings', 'Weather: loading']]);
+        await impl.start({ background: fakeModel, ui: { onClick() {} }, loop() {} });
         console.log('BMW Weather package, forecast and drawing checks passed.');
     } finally {
         https.get = originalGet;

@@ -42,9 +42,9 @@ function temp(v, unit) {
 }
 
 function createModel(ctx, log) {
-    let data = null, error = 'Waiting for weather', updated = 0;
+    let data = null, error = 'Waiting for weather', detail = '', updated = 0;
     let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
-    let lastAttempt = 0;
+    let lastAttempt = 0, refreshing = false;
     function updateSettings() {
         const s = ctx.settings;
         lat = LOCATION_LATITUDE;
@@ -53,7 +53,9 @@ function createModel(ctx, log) {
         refreshMs = (parseInt(s.get('refreshMinutes'), 10) || 30) * 60000;
     }
     async function refresh() {
+        if (refreshing) return;
         updateSettings();
+        refreshing = true;
         lastAttempt = Date.now();
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat) +
             '&longitude=' + encodeURIComponent(lon) +
@@ -63,16 +65,27 @@ function createModel(ctx, log) {
         try {
             const j = await requestJson(url);
             if (!j || !j.current || !j.daily) throw new Error('Weather response incomplete');
-            data = j; updated = Date.now(); error = '';
+            data = j; updated = Date.now(); error = ''; detail = '';
             log.info('weather updated');
-        } catch (e) { error = 'Weather unavailable'; log.warn('weather: ' + e.message); }
+        } catch (e) {
+            error = 'Weather unavailable';
+            detail = String(e && (e.code || e.message) || e).slice(0, 90);
+            log.warn('weather: ' + (e && e.stack || e));
+        } finally { refreshing = false; }
     }
     const timer = setInterval(() => { if (Date.now() - lastAttempt >= refreshMs) refresh(); }, 60000);
     if (timer.unref) timer.unref();
     return {
         refresh, updateSettings,
-        snapshot() { return { data, error, updated, unit }; }
+        snapshot() { return { data, error, detail, updated, unit }; }
     };
+}
+
+function widgetSummary(snap) {
+    if (!snap.data) return snap.detail ? 'Weather: ' + snap.detail : 'Weather: loading';
+    const current = snap.data.current;
+    return snap.error ? 'Weather: offline, last ' + temp(current.temperature_2m, snap.unit)
+        : 'Weather: ' + temp(current.temperature_2m, snap.unit) + ' ' + describe(current.weather_code);
 }
 
 function icon(cv, code, x, y, scale, phase) {
@@ -121,7 +134,7 @@ function drawWidget(ctx, snap) {
     cv.text('WEATHER', 36, 49, 14, '#9eafba', { font: 'bold', spacing: 1 });
     if (!d) {
         cv.text(snap.error || 'Loading...', 36, 100, 18, '#e6edf2', { font: 'bold' });
-        cv.text('Internet Uplink', 36, 130, 13, '#91a2ad');
+        cv.text(snap.detail || 'Internet Uplink', 36, 130, 13, '#91a2ad');
         return cv.canvas;
     }
     const c = d.current, daily = d.daily;
@@ -148,7 +161,7 @@ function drawScreen(ctx, snap) {
     cv.text('WEATHER', 58, 84, 22, '#9eafba', { font: 'bold', spacing: 2 });
     if (!d) {
         cv.text(snap.error || 'Loading weather…', 60, 190, 38, '#e6edf2', { font: 'bold' });
-        cv.text('Check Internet Uplink and location coordinates in the app source.', 62, 238, 20, '#9eafb9');
+        cv.text(snap.detail || 'Waiting for Internet Uplink', 62, 238, 20, '#9eafb9');
         return cv;
     }
     const c = d.current, daily = d.daily;
@@ -170,8 +183,9 @@ function drawScreen(ctx, snap) {
         if (number(daily.precipitation_probability_max[i]) !== null)
             cv.text('Rain ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
     }
-    cv.text('Open-Meteo  •  Updated ' + new Date(snap.updated).toLocaleTimeString(), 1190, 468, 15, '#7f929e');
+    cv.text((snap.error ? 'Offline: ' + snap.detail : 'Open-Meteo') + '  •  Updated ' + new Date(snap.updated).toLocaleTimeString(),
+        1000, 468, 15, '#7f929e');
     return cv;
 }
 
-module.exports = { createModel, drawWidget, drawScreen };
+module.exports = { createModel, widgetSummary, drawWidget, drawScreen };
