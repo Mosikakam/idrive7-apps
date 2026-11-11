@@ -13,7 +13,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.5');
+assert.strictEqual(pkg.version, '1.0.6');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -25,8 +25,17 @@ const sample = {
         weather_code: [61, 3, 0, 71, 2], temperature_2m_max: [4, 5, 6, 0, 3],
         temperature_2m_min: [-2, -1, 0, -4, -3], precipitation_probability_max: [70, 20, 0, 50, 10] },
 };
+const wttrSample = {
+    current_condition: [{ temp_C: '-3', FeelsLikeC: '-8', humidity: '82',
+        windspeedKmph: '18', weatherCode: '326' }],
+    weather: [{ date: '2026-11-10', maxtempC: '0', mintempC: '-6',
+        hourly: [{ time: '1200', weatherCode: '326', chanceofrain: '20', chanceofsnow: '80' }] },
+    { date: '2026-11-11', maxtempC: '1', mintempC: '-5',
+        hourly: [{ time: '1200', weatherCode: '116', chanceofrain: '10' }] }]
+};
 
-let status = 200, requests = 0, simulateTimeout = false, simulateTcpFailure = false;
+let status = 200, wttrStatus = 200, requests = 0, simulateTimeout = false;
+let tcpFailOpen = false, tcpFailWttr = false;
 const originalGet = https.get;
 const originalResolver = dns.Resolver;
 const originalConnect = net.connect;
@@ -35,7 +44,7 @@ let usedDns;
 dns.Resolver = class {
     setServers(servers) { usedDns = servers; }
     resolve4(host, callback) {
-        assert.ok(host === 'api.open-meteo.com' || host === 'api.github.com');
+        assert.ok(['api.open-meteo.com', 'api.github.com', 'wttr.in'].indexOf(host) >= 0);
         process.nextTick(() => callback(null, ['203.0.113.42']));
     }
     cancel() {}
@@ -57,16 +66,18 @@ https.get = function (opts, callback) {
     requests++;
     assert.strictEqual(arguments.length, 2, 'Node.js 8 supports only (options, callback)');
     assert.strictEqual(typeof callback, 'function');
-    assert.strictEqual(opts.hostname, 'api.open-meteo.com');
+    assert.ok(opts.hostname === 'api.open-meteo.com' || opts.hostname === 'wttr.in');
     assert.strictEqual(typeof opts.lookup, 'function');
-    assert.ok(/^\/v1\/forecast\?/.test(opts.path));
-    assert.ok(opts.path.indexOf('latitude=53.017') >= 0);
-    assert.ok(opts.path.indexOf('forecast_days=5') >= 0);
+    if (opts.hostname === 'api.open-meteo.com') {
+        assert.ok(/^\/v1\/forecast\?/.test(opts.path));
+        assert.ok(opts.path.indexOf('latitude=53.017') >= 0);
+        assert.ok(opts.path.indexOf('forecast_days=5') >= 0);
+    } else assert.strictEqual(opts.path, '/53.017,158.65?format=j1');
     const req = new EventEmitter();
     req.setTimeout = function (ms, fn) { assert.strictEqual(ms, 25000); req.timeout = fn; };
     req.destroy = function (err) { req.emit('error', err); };
     const res = new EventEmitter();
-    res.statusCode = status;
+    res.statusCode = opts.hostname === 'wttr.in' ? wttrStatus : status;
     res.setEncoding = function () {};
     const socket = new EventEmitter();
     process.nextTick(() => {
@@ -75,16 +86,16 @@ https.get = function (opts, callback) {
         if (err) return req.emit('error', err);
         assert.strictEqual(address, '203.0.113.42');
         assert.strictEqual(family, 4);
-        if (simulateTcpFailure) {
+        if (opts.hostname === 'api.open-meteo.com' ? tcpFailOpen : tcpFailWttr) {
             const e = new Error('Open-Meteo TCP connection timed out');
             e.code = 'EWEATHERTCP';
             return req.emit('error', e);
         }
         socket.emit('connect');
         socket.emit('secureConnect');
-        if (simulateTimeout) return req.timeout();
+        if (simulateTimeout && opts.hostname === 'api.open-meteo.com') return req.timeout();
         callback(res);
-        res.emit('data', JSON.stringify(sample));
+        res.emit('data', JSON.stringify(opts.hostname === 'wttr.in' ? wttrSample : sample));
         res.emit('end');
         });
     });
@@ -114,19 +125,32 @@ https.get = function (opts, callback) {
         assert.strictEqual(screen.w, 1600);
         assert.ok(screen.png().length > 1000);
         status = 503;
+        wttrStatus = 503;
         await model.refresh();
         assert.strictEqual(model.snapshot().data.current.temperature_2m, 2, 'keep last good forecast');
         assert.strictEqual(model.snapshot().error, 'Weather unavailable');
-        assert.strictEqual(model.snapshot().detail, 'Weather service HTTP 503');
+        assert.strictEqual(model.snapshot().detail, 'Open-Meteo HTTP 503; wttr.in HTTP 503');
         assert.ok(weather.widgetSummary(model.snapshot()).indexOf('offline') >= 0);
         weather.drawWidget(ctx, model.snapshot());
+        status = 200;
         simulateTimeout = true;
         await model.refresh();
-        assert.strictEqual(model.snapshot().detail, 'Weather idle timeout during HTTP response');
+        assert.ok(model.snapshot().detail.indexOf('Open-Meteo Weather idle timeout during HTTP response') === 0);
         simulateTimeout = false;
-        simulateTcpFailure = true;
+        tcpFailOpen = true;
+        tcpFailWttr = true;
         await model.refresh();
-        assert.strictEqual(model.snapshot().detail, 'Open-Meteo TCP timeout; GitHub TCP OK');
+        assert.strictEqual(model.snapshot().detail, 'Open-Meteo TCP timeout; wttr.in TCP timeout; GitHub TCP OK');
+        tcpFailWttr = false;
+        wttrStatus = 200;
+        await model.refresh();
+        assert.strictEqual(model.snapshot().error, '');
+        assert.strictEqual(model.snapshot().source, 'wttr.in');
+        assert.strictEqual(model.snapshot().data.current.temperature_2m, -3);
+        assert.strictEqual(model.snapshot().data.current.weather_code, 71);
+        assert.strictEqual(model.snapshot().data.daily.time.length, 2);
+        assert.strictEqual(model.snapshot().data.daily.precipitation_probability_max[0], 80);
+        weather.drawWidget(ctx, model.snapshot());
         // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
         let impl, widgetDraw, calls = 0, cells = [];
         const mainPath = path.join(__dirname, '..', '..', 'apps', 'bmw_weather', 'main.js');

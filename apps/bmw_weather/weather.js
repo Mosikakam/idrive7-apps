@@ -3,6 +3,7 @@
 const https = require('https');
 const net = require('net');
 const { lookupFor } = require('./uplink');
+const wttr = require('./wttr');
 const { ScaledCanvas } = require('./kit/canvas');
 const W = 384, H = 256;
 const widgetCanvas = new ScaledCanvas(W, H, 2);
@@ -10,7 +11,7 @@ const widgetCanvas = new ScaledCanvas(W, H, 2);
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
 
-function requestJson(path, lookup) {
+function requestJson(hostname, path, lookup) {
     return new Promise((resolve, reject) => {
         let phase = 'DNS', finished = false, deadline, tcpDeadline;
         function complete(err, value) {
@@ -25,7 +26,7 @@ function requestJson(path, lookup) {
                 if (!err) {
                     phase = 'TCP connection';
                     tcpDeadline = setTimeout(() => {
-                        const failure = new Error('Open-Meteo TCP connection timed out');
+                        const failure = new Error(hostname + ' TCP connection timed out');
                         failure.code = 'EWEATHERTCP';
                         req.destroy(failure);
                     }, 15000);
@@ -34,7 +35,7 @@ function requestJson(path, lookup) {
             });
         }
         // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
-        const req = https.get({ hostname: 'api.open-meteo.com', path, lookup: tracedLookup,
+        const req = https.get({ hostname, path, lookup: tracedLookup,
             headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
             phase = 'response body';
             let body = '';
@@ -74,6 +75,13 @@ function probeTcp(lookup) {
     });
 }
 
+function failureText(e) {
+    if (!e) return 'unknown error';
+    if (e.code === 'EWEATHERTCP') return 'TCP timeout';
+    if (/^EUPLINK/.test(e.code || '')) return e.message;
+    return String(e.code || e.message || e).replace(/^Weather service /, '');
+}
+
 const DESCRIPTIONS = {
     0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Fog', 48: 'Freezing fog',
     51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 56: 'Freezing drizzle', 57: 'Freezing drizzle',
@@ -93,6 +101,7 @@ function temp(v, unit) {
 
 function createModel(ctx, log) {
     let data = null, error = 'Waiting for weather', detail = '', updated = 0;
+    let source = '', fallbackUntil = 0;
     let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
     let lastAttempt = 0, refreshing = false;
     const lookup = lookupFor(ctx.dataDir);
@@ -108,29 +117,46 @@ function createModel(ctx, log) {
         updateSettings();
         refreshing = true;
         lastAttempt = Date.now();
-        const path = '/v1/forecast?latitude=' + encodeURIComponent(lat) +
+        const openPath = '/v1/forecast?latitude=' + encodeURIComponent(lat) +
             '&longitude=' + encodeURIComponent(lon) +
             '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m' +
             '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
             '&forecast_days=5&timezone=auto';
+        const providers = [
+            { name: 'Open-Meteo', host: 'api.open-meteo.com', path: openPath,
+                convert(j) { if (!j || !j.current || !j.daily) throw new Error('response incomplete'); return j; } },
+            { name: 'wttr.in', host: 'wttr.in', path: '/' + lat + ',' + lon + '?format=j1', convert: wttr.convert }
+        ];
+        if (Date.now() < fallbackUntil) providers.reverse();
+        const failures = [];
         try {
-            const j = await requestJson(path, lookup);
-            if (!j || !j.current || !j.daily) throw new Error('Weather response incomplete');
-            data = j; updated = Date.now(); error = ''; detail = '';
-            log.info('weather updated');
-        } catch (e) {
+            for (const provider of providers) {
+                try {
+                    const forecast = provider.convert(await requestJson(provider.host, provider.path, lookup));
+                    data = forecast; updated = Date.now(); error = ''; detail = ''; source = provider.name;
+                    fallbackUntil = provider.name === 'wttr.in' ? Date.now() + 6 * 3600000 : 0;
+                    log.info('weather updated from ' + source);
+                    return;
+                } catch (e) {
+                    failures.push({ name: provider.name, error: e });
+                    if (/^EUPLINK/.test(e.code || '')) break;
+                }
+            }
             error = 'Weather unavailable';
-            detail = e && e.code === 'EWEATHERTCP' ? 'Open-Meteo TCP timeout; ' + await probeTcp(lookup)
-                : String(e && (/^EUPLINK/.test(e.code || '') ? e.message : e.code || e.message) || e);
+            detail = failures.length === 1 && /^EUPLINK/.test(failures[0].error.code || '')
+                ? failureText(failures[0].error)
+                : failures.map((f) => f.name + ' ' + failureText(f.error)).join('; ');
+            if (failures.length === 2 && failures.every((f) => f.error.code === 'EWEATHERTCP'))
+                detail += '; ' + await probeTcp(lookup);
             detail = detail.slice(0, 90);
-            log.warn('weather: ' + (e && e.stack || e) + '; ' + detail);
+            log.warn('weather: ' + detail + '; ' + failures.map((f) => f.error.stack || f.error).join('; '));
         } finally { refreshing = false; }
     }
     const timer = setInterval(() => { if (Date.now() - lastAttempt >= refreshMs) refresh(); }, 60000);
     if (timer.unref) timer.unref();
     return {
         refresh, updateSettings,
-        snapshot() { return { data, error, detail, updated, unit }; }
+        snapshot() { return { data, error, detail, updated, unit, source }; }
     };
 }
 
@@ -205,7 +231,7 @@ function drawWidget(ctx, snap) {
         cv.text(temp(daily.temperature_2m_max[i], snap.unit), x, 209, 17, '#edf2f5', { font: 'bold' });
         cv.text(temp(daily.temperature_2m_min[i], snap.unit), x + 41, 209, 15, '#92a3ad');
     }
-    cv.text(snap.error ? 'Offline' : 'Open-Meteo', 344, 49, 11, '#71838e', { align: 'right' });
+    cv.text(snap.error ? 'Offline' : snap.source, 344, 49, 11, '#71838e', { align: 'right' });
     return cv.canvas;
 }
 
@@ -234,9 +260,9 @@ function drawScreen(ctx, snap) {
         cv.text(temp(daily.temperature_2m_max[i], snap.unit), x + 18, 332, 26, '#f0f4f6', { font: 'bold' });
         cv.text(temp(daily.temperature_2m_min[i], snap.unit), x + 78, 332, 23, '#9eafb9');
         if (number(daily.precipitation_probability_max[i]) !== null)
-            cv.text('Rain ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
+            cv.text('Precip ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
     }
-    cv.text((snap.error ? 'Offline: ' + snap.detail : 'Open-Meteo') + '  •  Updated ' + new Date(snap.updated).toLocaleTimeString(),
+    cv.text((snap.error ? 'Offline: ' + snap.detail : snap.source) + '  •  Updated ' + new Date(snap.updated).toLocaleTimeString(),
         1000, 468, 15, '#7f929e');
     return cv;
 }
