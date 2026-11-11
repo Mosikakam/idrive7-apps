@@ -11,19 +11,39 @@ const LOCATION_LONGITUDE = 158.650;
 
 function requestJson(path, lookup) {
     return new Promise((resolve, reject) => {
+        let phase = 'DNS', finished = false, deadline;
+        function complete(err, value) {
+            if (finished) return;
+            finished = true;
+            clearTimeout(deadline);
+            if (err) reject(err); else resolve(value);
+        }
+        function tracedLookup(hostname, options, callback) {
+            lookup(hostname, options, (err, address, family) => {
+                if (!err) phase = 'TCP connection';
+                callback(err, address, family);
+            });
+        }
         // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
-        const req = https.get({ hostname: 'api.open-meteo.com', path, lookup,
+        const req = https.get({ hostname: 'api.open-meteo.com', path, lookup: tracedLookup,
             headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
+            phase = 'response body';
             let body = '';
             res.setEncoding('utf8');
             res.on('data', (chunk) => { body += chunk; if (body.length > 200000) req.destroy(new Error('Weather response too large')); });
             res.on('end', () => {
-                if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error('Weather service HTTP ' + res.statusCode));
-                try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+                if (res.statusCode < 200 || res.statusCode >= 300) return complete(new Error('Weather service HTTP ' + res.statusCode));
+                try { complete(null, JSON.parse(body)); } catch (e) { complete(e); }
             });
+            res.on('error', complete);
         });
-        req.setTimeout(10000, () => req.destroy(new Error('Weather request timed out')));
-        req.on('error', reject);
+        req.on('socket', (socket) => {
+            socket.on('connect', () => { phase = 'TLS handshake'; });
+            socket.on('secureConnect', () => { phase = 'HTTP response'; });
+        });
+        req.setTimeout(25000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
+        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), 40000);
+        req.on('error', complete);
     });
 }
 

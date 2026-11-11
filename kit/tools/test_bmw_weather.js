@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.3');
+assert.strictEqual(pkg.version, '1.0.4');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -25,7 +25,7 @@ const sample = {
         temperature_2m_min: [-2, -1, 0, -4, -3], precipitation_probability_max: [70, 20, 0, 50, 10] },
 };
 
-let status = 200, requests = 0;
+let status = 200, requests = 0, simulateTimeout = false;
 const originalGet = https.get;
 const originalResolver = dns.Resolver;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmw-weather-'));
@@ -48,19 +48,26 @@ https.get = function (opts, callback) {
     assert.ok(opts.path.indexOf('latitude=53.017') >= 0);
     assert.ok(opts.path.indexOf('forecast_days=5') >= 0);
     const req = new EventEmitter();
-    req.setTimeout = function () {};
+    req.setTimeout = function (ms, fn) { assert.strictEqual(ms, 25000); req.timeout = fn; };
     req.destroy = function (err) { req.emit('error', err); };
     const res = new EventEmitter();
     res.statusCode = status;
     res.setEncoding = function () {};
-    process.nextTick(() => opts.lookup(opts.hostname, {}, (err, address, family) => {
+    const socket = new EventEmitter();
+    process.nextTick(() => {
+        req.emit('socket', socket);
+        opts.lookup(opts.hostname, {}, (err, address, family) => {
         if (err) return req.emit('error', err);
         assert.strictEqual(address, '203.0.113.42');
         assert.strictEqual(family, 4);
+        socket.emit('connect');
+        socket.emit('secureConnect');
+        if (simulateTimeout) return req.timeout();
         callback(res);
         res.emit('data', JSON.stringify(sample));
         res.emit('end');
-    }));
+        });
+    });
     return req;
 };
 
@@ -93,6 +100,9 @@ https.get = function (opts, callback) {
         assert.strictEqual(model.snapshot().detail, 'Weather service HTTP 503');
         assert.ok(weather.widgetSummary(model.snapshot()).indexOf('offline') >= 0);
         weather.drawWidget(ctx, model.snapshot());
+        simulateTimeout = true;
+        await model.refresh();
+        assert.strictEqual(model.snapshot().detail, 'Weather idle timeout during HTTP response');
         // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
         let impl, widgetDraw, calls = 0, cells = [];
         const mainPath = path.join(__dirname, '..', '..', 'apps', 'bmw_weather', 'main.js');
