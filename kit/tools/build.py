@@ -435,6 +435,8 @@ def build(app_id, language='en', preview_only=False):
             'userLoginRequired': False, 'backgroundPriority': 200, 'someipManifest': 'manifest.json',
         },
     }
+    if spec.get('mguInternet'):
+        pkg['mguInternet'] = True
     # app.json "autostart": the platform starts the app by itself (the Store's deploy tool lists it so); its
     # impl.background runs then, without screens
     if spec.get('autostart'):
