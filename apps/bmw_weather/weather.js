@@ -1,6 +1,7 @@
 'use strict';
 
 const https = require('https');
+const { lookupFor } = require('./uplink');
 const { ScaledCanvas } = require('./kit/canvas');
 const W = 384, H = 256;
 const widgetCanvas = new ScaledCanvas(W, H, 2);
@@ -8,10 +9,10 @@ const widgetCanvas = new ScaledCanvas(W, H, 2);
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
 
-function requestJson(path) {
+function requestJson(path, lookup) {
     return new Promise((resolve, reject) => {
         // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
-        const req = https.get({ hostname: 'api.open-meteo.com', path,
+        const req = https.get({ hostname: 'api.open-meteo.com', path, lookup,
             headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
             let body = '';
             res.setEncoding('utf8');
@@ -47,6 +48,7 @@ function createModel(ctx, log) {
     let data = null, error = 'Waiting for weather', detail = '', updated = 0;
     let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
     let lastAttempt = 0, refreshing = false;
+    const lookup = lookupFor(ctx.dataDir);
     function updateSettings() {
         const s = ctx.settings;
         lat = LOCATION_LATITUDE;
@@ -65,13 +67,13 @@ function createModel(ctx, log) {
             '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
             '&forecast_days=5&timezone=auto';
         try {
-            const j = await requestJson(path);
+            const j = await requestJson(path, lookup);
             if (!j || !j.current || !j.daily) throw new Error('Weather response incomplete');
             data = j; updated = Date.now(); error = ''; detail = '';
             log.info('weather updated');
         } catch (e) {
             error = 'Weather unavailable';
-            detail = String(e && (e.code || e.message) || e).slice(0, 90);
+            detail = String(e && (/^EUPLINK/.test(e.code || '') ? e.message : e.code || e.message) || e).slice(0, 90);
             log.warn('weather: ' + (e && e.stack || e));
         } finally { refreshing = false; }
     }

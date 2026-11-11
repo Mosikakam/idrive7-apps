@@ -5,12 +5,14 @@ const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const dns = require('dns');
+const os = require('os');
 const Module = require('module');
 
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.2');
+assert.strictEqual(pkg.version, '1.0.3');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -25,11 +27,23 @@ const sample = {
 
 let status = 200, requests = 0;
 const originalGet = https.get;
+const originalResolver = dns.Resolver;
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmw-weather-'));
+let usedDns;
+dns.Resolver = class {
+    setServers(servers) { usedDns = servers; }
+    resolve4(host, callback) {
+        assert.strictEqual(host, 'api.open-meteo.com');
+        process.nextTick(() => callback(null, ['203.0.113.42']));
+    }
+    cancel() {}
+};
 https.get = function (opts, callback) {
     requests++;
     assert.strictEqual(arguments.length, 2, 'Node.js 8 supports only (options, callback)');
     assert.strictEqual(typeof callback, 'function');
     assert.strictEqual(opts.hostname, 'api.open-meteo.com');
+    assert.strictEqual(typeof opts.lookup, 'function');
     assert.ok(/^\/v1\/forecast\?/.test(opts.path));
     assert.ok(opts.path.indexOf('latitude=53.017') >= 0);
     assert.ok(opts.path.indexOf('forecast_days=5') >= 0);
@@ -39,22 +53,29 @@ https.get = function (opts, callback) {
     const res = new EventEmitter();
     res.statusCode = status;
     res.setEncoding = function () {};
-    process.nextTick(() => {
+    process.nextTick(() => opts.lookup(opts.hostname, {}, (err, address, family) => {
+        if (err) return req.emit('error', err);
+        assert.strictEqual(address, '203.0.113.42');
+        assert.strictEqual(family, 4);
         callback(res);
         res.emit('data', JSON.stringify(sample));
         res.emit('end');
-    });
+    }));
     return req;
 };
 
 (async function () {
     try {
-        const ctx = { settings: { get: (key) => key === 'temperatureUnit' ? 'c' : '30' },
+        const ctx = { dataDir: tempDir, settings: { get: (key) => key === 'temperatureUnit' ? 'c' : '30' },
             canvas: (w, h) => new Canvas(w, h) };
         const log = { info() {}, warn() {} };
         const model = weather.createModel(ctx, log);
         await model.refresh();
-        assert.strictEqual(requests, 1);
+        assert.strictEqual(model.snapshot().detail, 'No Internet Uplink lease for Weather');
+        fs.writeFileSync(path.join(tempDir, 'uplink.json'), JSON.stringify({ ip: '192.0.2.2', dns: ['192.0.2.1'] }));
+        await model.refresh();
+        assert.strictEqual(requests, 2);
+        assert.deepStrictEqual(usedDns, ['192.0.2.1']);
         assert.strictEqual(model.snapshot().data.current.temperature_2m, 2);
         assert.strictEqual(model.snapshot().error, '');
         assert.ok(weather.widgetSummary(model.snapshot()).indexOf('Weather: 2°') === 0);
@@ -98,5 +119,7 @@ https.get = function (opts, callback) {
         console.log('BMW Weather package, forecast and drawing checks passed.');
     } finally {
         https.get = originalGet;
+        dns.Resolver = originalResolver;
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
 })().catch((e) => { console.error(e); process.exitCode = 1; });
