@@ -10,7 +10,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.1');
+assert.strictEqual(pkg.version, '1.0.2');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -25,11 +25,14 @@ const sample = {
 
 let status = 200, requests = 0;
 const originalGet = https.get;
-https.get = function (url, opts, callback) {
+https.get = function (opts, callback) {
     requests++;
-    assert.ok(/^https:\/\/api\.open-meteo\.com\/v1\/forecast\?/.test(url));
-    assert.ok(url.indexOf('latitude=53.017') >= 0);
-    assert.ok(url.indexOf('forecast_days=5') >= 0);
+    assert.strictEqual(arguments.length, 2, 'Node.js 8 supports only (options, callback)');
+    assert.strictEqual(typeof callback, 'function');
+    assert.strictEqual(opts.hostname, 'api.open-meteo.com');
+    assert.ok(/^\/v1\/forecast\?/.test(opts.path));
+    assert.ok(opts.path.indexOf('latitude=53.017') >= 0);
+    assert.ok(opts.path.indexOf('forecast_days=5') >= 0);
     const req = new EventEmitter();
     req.setTimeout = function () {};
     req.destroy = function (err) { req.emit('error', err); };

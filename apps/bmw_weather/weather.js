@@ -8,9 +8,11 @@ const widgetCanvas = new ScaledCanvas(W, H, 2);
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
 
-function requestJson(url) {
+function requestJson(path) {
     return new Promise((resolve, reject) => {
-        const req = https.get(url, { headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
+        // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
+        const req = https.get({ hostname: 'api.open-meteo.com', path,
+            headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
             let body = '';
             res.setEncoding('utf8');
             res.on('data', (chunk) => { body += chunk; if (body.length > 200000) req.destroy(new Error('Weather response too large')); });
@@ -57,13 +59,13 @@ function createModel(ctx, log) {
         updateSettings();
         refreshing = true;
         lastAttempt = Date.now();
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat) +
+        const path = '/v1/forecast?latitude=' + encodeURIComponent(lat) +
             '&longitude=' + encodeURIComponent(lon) +
             '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m' +
             '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
             '&forecast_days=5&timezone=auto';
         try {
-            const j = await requestJson(url);
+            const j = await requestJson(path);
             if (!j || !j.current || !j.daily) throw new Error('Weather response incomplete');
             data = j; updated = Date.now(); error = ''; detail = '';
             log.info('weather updated');
