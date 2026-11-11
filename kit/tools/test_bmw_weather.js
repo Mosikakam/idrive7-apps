@@ -6,13 +6,14 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const dns = require('dns');
+const net = require('net');
 const os = require('os');
 const Module = require('module');
 
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.4');
+assert.strictEqual(pkg.version, '1.0.5');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const weather = require(path.join(source, 'javascript', 'weather'));
 const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
@@ -25,18 +26,32 @@ const sample = {
         temperature_2m_min: [-2, -1, 0, -4, -3], precipitation_probability_max: [70, 20, 0, 50, 10] },
 };
 
-let status = 200, requests = 0, simulateTimeout = false;
+let status = 200, requests = 0, simulateTimeout = false, simulateTcpFailure = false;
 const originalGet = https.get;
 const originalResolver = dns.Resolver;
+const originalConnect = net.connect;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmw-weather-'));
 let usedDns;
 dns.Resolver = class {
     setServers(servers) { usedDns = servers; }
     resolve4(host, callback) {
-        assert.strictEqual(host, 'api.open-meteo.com');
+        assert.ok(host === 'api.open-meteo.com' || host === 'api.github.com');
         process.nextTick(() => callback(null, ['203.0.113.42']));
     }
     cancel() {}
+};
+net.connect = function (opts) {
+    assert.strictEqual(opts.host, 'api.github.com');
+    assert.strictEqual(opts.port, 443);
+    const socket = new EventEmitter();
+    socket.destroy = function () {};
+    process.nextTick(() => opts.lookup(opts.host, {}, (err, address, family) => {
+        if (err) return socket.emit('error', err);
+        assert.strictEqual(address, '203.0.113.42');
+        assert.strictEqual(family, 4);
+        socket.emit('connect');
+    }));
+    return socket;
 };
 https.get = function (opts, callback) {
     requests++;
@@ -60,6 +75,11 @@ https.get = function (opts, callback) {
         if (err) return req.emit('error', err);
         assert.strictEqual(address, '203.0.113.42');
         assert.strictEqual(family, 4);
+        if (simulateTcpFailure) {
+            const e = new Error('Open-Meteo TCP connection timed out');
+            e.code = 'EWEATHERTCP';
+            return req.emit('error', e);
+        }
         socket.emit('connect');
         socket.emit('secureConnect');
         if (simulateTimeout) return req.timeout();
@@ -103,6 +123,10 @@ https.get = function (opts, callback) {
         simulateTimeout = true;
         await model.refresh();
         assert.strictEqual(model.snapshot().detail, 'Weather idle timeout during HTTP response');
+        simulateTimeout = false;
+        simulateTcpFailure = true;
+        await model.refresh();
+        assert.strictEqual(model.snapshot().detail, 'Open-Meteo TCP timeout; GitHub TCP OK');
         // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
         let impl, widgetDraw, calls = 0, cells = [];
         const mainPath = path.join(__dirname, '..', '..', 'apps', 'bmw_weather', 'main.js');
@@ -130,6 +154,7 @@ https.get = function (opts, callback) {
     } finally {
         https.get = originalGet;
         dns.Resolver = originalResolver;
+        net.connect = originalConnect;
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 })().catch((e) => { console.error(e); process.exitCode = 1; });

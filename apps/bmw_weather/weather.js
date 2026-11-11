@@ -1,6 +1,7 @@
 'use strict';
 
 const https = require('https');
+const net = require('net');
 const { lookupFor } = require('./uplink');
 const { ScaledCanvas } = require('./kit/canvas');
 const W = 384, H = 256;
@@ -11,16 +12,24 @@ const LOCATION_LONGITUDE = 158.650;
 
 function requestJson(path, lookup) {
     return new Promise((resolve, reject) => {
-        let phase = 'DNS', finished = false, deadline;
+        let phase = 'DNS', finished = false, deadline, tcpDeadline;
         function complete(err, value) {
             if (finished) return;
             finished = true;
             clearTimeout(deadline);
+            clearTimeout(tcpDeadline);
             if (err) reject(err); else resolve(value);
         }
         function tracedLookup(hostname, options, callback) {
             lookup(hostname, options, (err, address, family) => {
-                if (!err) phase = 'TCP connection';
+                if (!err) {
+                    phase = 'TCP connection';
+                    tcpDeadline = setTimeout(() => {
+                        const failure = new Error('Open-Meteo TCP connection timed out');
+                        failure.code = 'EWEATHERTCP';
+                        req.destroy(failure);
+                    }, 15000);
+                }
                 callback(err, address, family);
             });
         }
@@ -38,12 +47,30 @@ function requestJson(path, lookup) {
             res.on('error', complete);
         });
         req.on('socket', (socket) => {
-            socket.on('connect', () => { phase = 'TLS handshake'; });
+            socket.on('connect', () => { clearTimeout(tcpDeadline); phase = 'TLS handshake'; });
             socket.on('secureConnect', () => { phase = 'HTTP response'; });
         });
         req.setTimeout(25000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
         deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), 40000);
         req.on('error', complete);
+    });
+}
+
+function probeTcp(lookup) {
+    return new Promise((resolve) => {
+        let socket, finished = false, deadline;
+        function complete(result) {
+            if (finished) return;
+            finished = true;
+            clearTimeout(deadline);
+            if (socket) socket.destroy();
+            resolve(result);
+        }
+        try { socket = net.connect({ host: 'api.github.com', port: 443, lookup }); }
+        catch (e) { return complete('GitHub ' + (e.code || e.message)); }
+        deadline = setTimeout(() => complete('GitHub TCP timeout'), 8000);
+        socket.on('connect', () => complete('GitHub TCP OK'));
+        socket.on('error', (e) => complete('GitHub ' + (e.code || e.message)));
     });
 }
 
@@ -93,8 +120,10 @@ function createModel(ctx, log) {
             log.info('weather updated');
         } catch (e) {
             error = 'Weather unavailable';
-            detail = String(e && (/^EUPLINK/.test(e.code || '') ? e.message : e.code || e.message) || e).slice(0, 90);
-            log.warn('weather: ' + (e && e.stack || e));
+            detail = e && e.code === 'EWEATHERTCP' ? 'Open-Meteo TCP timeout; ' + await probeTcp(lookup)
+                : String(e && (/^EUPLINK/.test(e.code || '') ? e.message : e.code || e.message) || e);
+            detail = detail.slice(0, 90);
+            log.warn('weather: ' + (e && e.stack || e) + '; ' + detail);
         } finally { refreshing = false; }
     }
     const timer = setInterval(() => { if (Date.now() - lastAttempt >= refreshMs) refresh(); }, 60000);
