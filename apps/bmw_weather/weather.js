@@ -1,7 +1,6 @@
 'use strict';
 
 const https = require('https');
-const net = require('net');
 const { lookupFor } = require('./uplink');
 const wttr = require('./wttr');
 const { ScaledCanvas } = require('./kit/canvas');
@@ -55,28 +54,9 @@ function requestJson(hostname, path, lookup) {
             socket.on('connect', () => { clearTimeout(tcpDeadline); phase = 'TLS handshake'; });
             socket.on('secureConnect', () => { phase = 'HTTP response'; });
         });
-        const compact = hostname === 'wttr.is';
-        req.setTimeout(compact ? 12000 : 25000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
-        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), compact ? 25000 : 40000);
+        req.setTimeout(12000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
+        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), 25000);
         req.on('error', complete);
-    });
-}
-
-function probeTcp(lookup) {
-    return new Promise((resolve) => {
-        let socket, finished = false, deadline;
-        function complete(result) {
-            if (finished) return;
-            finished = true;
-            clearTimeout(deadline);
-            if (socket) socket.destroy();
-            resolve(result);
-        }
-        try { socket = net.connect({ host: 'api.github.com', port: 443, lookup }); }
-        catch (e) { return complete('GitHub ' + (e.code || e.message)); }
-        deadline = setTimeout(() => complete('GitHub TCP timeout'), 8000);
-        socket.on('connect', () => complete('GitHub TCP OK'));
-        socket.on('error', (e) => complete('GitHub ' + (e.code || e.message)));
     });
 }
 
@@ -106,7 +86,7 @@ function temp(v, unit) {
 
 function createModel(ctx, log) {
     let data = null, error = 'Waiting for weather', detail = '', updated = 0;
-    let source = '', fallbackUntil = 0;
+    let source = '';
     let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
     let lastAttempt = 0, refreshing = false;
     const lookup = lookupFor(ctx.dataDir);
@@ -122,39 +102,15 @@ function createModel(ctx, log) {
         updateSettings();
         refreshing = true;
         lastAttempt = Date.now();
-        const openPath = '/v1/forecast?latitude=' + encodeURIComponent(lat) +
-            '&longitude=' + encodeURIComponent(lon) +
-            '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m' +
-            '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
-            '&forecast_days=5&timezone=auto';
-        const providers = [
-            { name: 'Open-Meteo', host: 'api.open-meteo.com', path: openPath,
-                convert(j) { if (!j || !j.current || !j.daily) throw new Error('response incomplete'); return j; } },
-            { name: 'wttr.is', host: 'wttr.is', path: '/' + lat + ',' + lon + '?format=j2', convert: wttr.convert }
-        ];
-        if (Date.now() < fallbackUntil) providers.reverse();
-        const failures = [];
         try {
-            for (const provider of providers) {
-                try {
-                    const forecast = provider.convert(await requestJson(provider.host, provider.path, lookup));
-                    data = forecast; updated = Date.now(); error = ''; detail = ''; source = provider.name;
-                    fallbackUntil = provider.name === 'wttr.is' ? Date.now() + 6 * 3600000 : 0;
-                    log.info('weather updated from ' + source);
-                    return;
-                } catch (e) {
-                    failures.push({ name: provider.name, error: e });
-                    if (/^EUPLINK/.test(e.code || '')) break;
-                }
-            }
+            const forecast = wttr.convert(await requestJson('wttr.is', '/' + lat + ',' + lon + '?format=j2', lookup));
+            data = forecast; updated = Date.now(); error = ''; detail = ''; source = 'wttr.is';
+            log.info('weather updated from ' + source);
+        } catch (e) {
             error = 'Weather unavailable';
-            detail = failures.length === 1 && /^EUPLINK/.test(failures[0].error.code || '')
-                ? failureText(failures[0].error)
-                : failures.map((f) => f.name + ' ' + failureText(f.error)).join('; ');
-            if (failures.length === 2 && failures.every((f) => f.error.code === 'EWEATHERTCP'))
-                detail += '; ' + await probeTcp(lookup);
+            detail = (/^EUPLINK/.test(e.code || '') ? '' : 'wttr.is ') + failureText(e);
             detail = detail.slice(0, 90);
-            log.warn('weather: ' + detail + '; ' + failures.map((f) => f.error.stack || f.error).join('; '));
+            log.warn('weather: ' + detail + '; ' + (e.stack || e));
         } finally { refreshing = false; }
     }
     const timer = setInterval(() => { if (Date.now() - lastAttempt >= refreshMs) refresh(); }, 60000);

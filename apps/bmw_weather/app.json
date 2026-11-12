@@ -1,8 +1,8 @@
 {
   "id": "bmw_weather",
   "title": "Weather",
-  "description": "Current weather and a five-day forecast, refreshed over the MGU Internet Uplink.",
-  "version": "1.0.7",
+  "description": "Current weather and a three-day forecast, refreshed over the MGU Internet Uplink.",
+  "version": "1.0.8",
   "mguInternet": true,
   "vendor": "custom",
   "loggingId": "OA9W",
