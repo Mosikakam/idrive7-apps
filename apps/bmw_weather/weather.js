@@ -37,10 +37,14 @@ function requestJson(hostname, path, lookup) {
         // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
         const req = https.get({ hostname, path, lookup: tracedLookup,
             headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
-            phase = 'response body';
+            phase = 'response body 0B';
             let body = '';
             res.setEncoding('utf8');
-            res.on('data', (chunk) => { body += chunk; if (body.length > 200000) req.destroy(new Error('Weather response too large')); });
+            res.on('data', (chunk) => {
+                body += chunk;
+                phase = 'response body ' + body.length + 'B';
+                if (body.length > 200000) req.destroy(new Error('Weather response too large'));
+            });
             res.on('end', () => {
                 if (res.statusCode < 200 || res.statusCode >= 300) return complete(new Error('Weather service HTTP ' + res.statusCode));
                 try { complete(null, JSON.parse(body)); } catch (e) { complete(e); }
@@ -51,8 +55,9 @@ function requestJson(hostname, path, lookup) {
             socket.on('connect', () => { clearTimeout(tcpDeadline); phase = 'TLS handshake'; });
             socket.on('secureConnect', () => { phase = 'HTTP response'; });
         });
-        req.setTimeout(25000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
-        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), 40000);
+        const compact = hostname === 'wttr.is';
+        req.setTimeout(compact ? 12000 : 25000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
+        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), compact ? 25000 : 40000);
         req.on('error', complete);
     });
 }
@@ -125,7 +130,7 @@ function createModel(ctx, log) {
         const providers = [
             { name: 'Open-Meteo', host: 'api.open-meteo.com', path: openPath,
                 convert(j) { if (!j || !j.current || !j.daily) throw new Error('response incomplete'); return j; } },
-            { name: 'wttr.in', host: 'wttr.in', path: '/' + lat + ',' + lon + '?format=j1', convert: wttr.convert }
+            { name: 'wttr.is', host: 'wttr.is', path: '/' + lat + ',' + lon + '?format=j2', convert: wttr.convert }
         ];
         if (Date.now() < fallbackUntil) providers.reverse();
         const failures = [];
@@ -134,7 +139,7 @@ function createModel(ctx, log) {
                 try {
                     const forecast = provider.convert(await requestJson(provider.host, provider.path, lookup));
                     data = forecast; updated = Date.now(); error = ''; detail = ''; source = provider.name;
-                    fallbackUntil = provider.name === 'wttr.in' ? Date.now() + 6 * 3600000 : 0;
+                    fallbackUntil = provider.name === 'wttr.is' ? Date.now() + 6 * 3600000 : 0;
                     log.info('weather updated from ' + source);
                     return;
                 } catch (e) {
@@ -255,8 +260,10 @@ function drawScreen(ctx, snap) {
         const label = i === 0 ? 'TODAY' : ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][day.getDay()];
         cv.roundRect(x, 112, 148, 276, 12, '#192832');
         cv.text(label, x + 18, 150, 17, '#91a3ad', { font: 'bold' });
-        icon(cv, daily.weather_code[i], x + 28, 173, 1.2, now + i);
-        cv.text(describe(daily.weather_code[i]), x + 16, 275, 15, '#d9e1e6');
+        if (daily.weather_code[i] !== null) {
+            icon(cv, daily.weather_code[i], x + 28, 173, 1.2, now + i);
+            cv.text(describe(daily.weather_code[i]), x + 16, 275, 15, '#d9e1e6');
+        }
         cv.text(temp(daily.temperature_2m_max[i], snap.unit), x + 18, 332, 26, '#f0f4f6', { font: 'bold' });
         cv.text(temp(daily.temperature_2m_min[i], snap.unit), x + 78, 332, 23, '#9eafb9');
         if (number(daily.precipitation_probability_max[i]) !== null)
