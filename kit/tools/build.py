@@ -399,13 +399,18 @@ def build_start_widget(spec, app_id, icon_src, out, pkg_out=None):
 
 
 def build(app_id, language='en', preview_only=False):
-    language = normalize_language(language)
     if not preview_only and not all(os.path.isfile(os.path.join(SDK, name)) for name in ('index.js', 'package.json')):
         raise SystemExit('BMW oap-sdk is missing. Extract it from your own head unit with kit/tools/extract_sdk.js, '
                          'or use --preview-only for an offline preview (no installable package).')
     adir = os.path.join(APPS, app_id)
     spec = json.load(open(os.path.join(adir, 'app.json'), encoding='utf-8'))
+    fixed_language = spec.get('fixedLanguage')
+    language = normalize_language(fixed_language or language)
+    catalog_version = spec['version']
     spec = localize_spec(spec, language)
+    if fixed_language:
+        # The Store expects the package version declared in the app manifest.
+        spec['version'] = catalog_version
     spec.setdefault('id', app_id)
     ver = spec['version']
     stage = os.path.join(DIST, app_id)

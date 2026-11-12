@@ -1,8 +1,9 @@
 {
   "id": "bmw_weather",
-  "title": "Weather",
-  "description": "Current weather and a three-day forecast, refreshed over the MGU Internet Uplink.",
-  "version": "1.0.8",
+  "title": "Погода",
+  "description": "Текущая погода и прогноз на три дня для iDrive 7.",
+  "version": "1.0.9",
+  "fixedLanguage": "ru",
   "mguInternet": true,
   "vendor": "custom",
   "loggingId": "OA9W",
@@ -11,27 +12,31 @@
     {
       "name": "MAIN",
       "kind": "canvas",
-      "title": "Weather",
-      "buttons": [["BTN_REFRESH", "Refresh"], ["BTN_SETTINGS", "Settings"]]
+      "title": "Погода",
+      "buttons": [["BTN_REFRESH", "Обновить"], ["BTN_SETTINGS", "Настройки"]]
     }
   ],
   "startWidget": {
-    "comment": "Uses BMW's Drive Recorder home-widget layout and the BackgroundImage1 image cell. Verify the image crop on the target MGU before regular use.",
-    "name": "Weather",
-    "layout": "LT_Table_OnlineApps_DriveRecorderWidget",
-    "image": "BackgroundImage1",
+    "comment": "The BMW BasicWidget template has a separate image cell for each tile size.",
+    "name": "Погода",
+    "layout": "LT_Table_BasicWidget",
+    "image": "BackgroundImage_Big",
+    "imageSmall": "BackgroundImage_Small",
     "size": [384, 256],
     "safe": [0.09, 0.10],
     "cells": {
-      "Title": ["Weather", "Text"],
-      "ErrorInfo": [false, "Bool"],
-      "background": [true, "Bool"],
-      "ProgressbarVisible": [false, "Bool"],
-      "TextRecordings": ["Loading weather", "Text"]
+      "Title": ["", "Text"],
+      "InfoText1strow": ["", "Text"],
+      "InfoText2ndtrow": ["", "Text"],
+      "InfoText3rdrow": ["", "Text"],
+      "background": [true, "Bool"]
     }
   },
   "settings": [
-    { "key": "temperatureUnit", "label": "Temperature", "type": "choice", "default": "c", "options": [["c", "Celsius"], ["f", "Fahrenheit"]] },
-    { "key": "refreshMinutes", "label": "Refresh interval", "type": "choice", "default": "30", "options": [["15", "15 minutes"], ["30", "30 minutes"], ["60", "60 minutes"]] }
-  ]
+    { "key": "temperatureUnit", "label": "Единицы температуры", "type": "choice", "default": "c", "options": [["c", "Цельсий"], ["f", "Фаренгейт"]] },
+    { "key": "refreshMinutes", "label": "Интервал обновления", "type": "choice", "default": "30", "options": [["15", "15 минут"], ["30", "30 минут"], ["60", "60 минут"]] }
+  ],
+  "strings": {
+    "ru": { "SID_BMW_WEATHER_REPO_CREDITS_TITLE": "Приложения для iDrive 7" }
+  }
 }

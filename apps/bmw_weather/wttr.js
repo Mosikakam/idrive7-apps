@@ -6,6 +6,12 @@ function value(v) {
     return isFinite(n) ? n : null;
 }
 
+function incomplete(message) {
+    const error = new Error(message);
+    error.code = 'EWEATHERDATA';
+    return error;
+}
+
 function code(v) {
     const n = Number(v);
     if (n === 113) return 0;
@@ -23,7 +29,7 @@ function convert(response) {
     const j = response && (response.data || response);
     const c = j && j.current_condition && j.current_condition[0];
     const days = j && j.weather;
-    if (!c || !Array.isArray(days) || !days.length) throw new Error('wttr.in response incomplete');
+    if (!c || !Array.isArray(days) || !days.length) throw incomplete('Сервис вернул неполный прогноз');
     const current = {
         temperature_2m: value(c.temp_C),
         apparent_temperature: value(c.FeelsLikeC),
@@ -31,7 +37,7 @@ function convert(response) {
         wind_speed_10m: value(c.windspeedKmph),
         weather_code: code(c.weatherCode)
     };
-    if (current.temperature_2m === null) throw new Error('wttr.in temperature missing');
+    if (current.temperature_2m === null) throw incomplete('Сервис не вернул текущую температуру');
     const daily = { time: [], weather_code: [], temperature_2m_max: [],
         temperature_2m_min: [], precipitation_probability_max: [] };
     days.slice(0, 5).forEach((day) => {

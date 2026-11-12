@@ -20,11 +20,11 @@ function lookupFor(dataDir) {
         try { lease = JSON.parse(fs.readFileSync(path.join(dataDir, 'uplink.json'), 'utf8')); }
         catch (e) { lease = null; }
         if (!lease || !lease.ip)
-            return process.nextTick(() => cb(error('No Internet Uplink lease for Weather', 'EUPLINK')));
+            return process.nextTick(() => cb(error('Приложение не получило интернет-подключение', 'EUPLINK')));
 
         const servers = Array.isArray(lease.dns) ? lease.dns.filter((ip) => net.isIP(ip) === 4) : [];
         if (!servers.length)
-            return process.nextTick(() => cb(error('Internet Uplink has no DNS servers', 'EUPLINKDNS')));
+            return process.nextTick(() => cb(error('В подключении не указаны серверы DNS', 'EUPLINKDNS')));
 
         let resolver;
         try {
@@ -40,13 +40,13 @@ function lookupFor(dataDir) {
             cb(err, address, address ? 4 : undefined);
         };
         const timer = setTimeout(() => {
-            finish(error('Internet Uplink DNS timed out', 'EDNSTIMEOUT'));
+            finish(error('Сервер DNS не ответил вовремя', 'EDNSTIMEOUT'));
             try { resolver.cancel(); } catch (e) {}
         }, 10000);
         try {
             resolver.resolve4(hostname, (err, addresses) => {
                 if (err) return finish(err);
-                if (!addresses || !addresses.length) return finish(error('Weather host has no IPv4 address', 'ENODNS'));
+                if (!addresses || !addresses.length) return finish(error('Не найден IPv4-адрес сервиса погоды', 'ENODNS'));
                 finish(null, addresses[0]);
             });
         } catch (e) { finish(e); }

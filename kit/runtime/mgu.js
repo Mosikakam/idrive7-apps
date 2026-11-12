@@ -405,11 +405,14 @@ class Widget {
     image(spawnId, img) {
         const st = this._img[spawnId] || (this._img[spawnId] = { n: 0, live: [], busy: null, next: null });
         if (st.busy) { st.next = img; return st.busy; }
-        const cell = this.spec.image || 'BackgroundImage1';
         const run = async (frame) => {
             if (!this.comp) return;
+            const instances = this.comp.spawnedInstances || {};
+            const instance = instances[spawnId];
+            const cell = (instance && instance.widgetSize === 1 && this.spec.imageSmall)
+                || this.spec.image || 'BackgroundImage1';
             const px = Buffer.from(frame.d.buffer, frame.d.byteOffset, frame.d.length);
-            if (st.lastPx && Date.now() - st.lastPush < 5000 && px.equals(st.lastPx)) return;
+            if (st.lastCell === cell && st.lastPx && Date.now() - st.lastPush < 5000 && px.equals(st.lastPx)) return;
             const rb = this.comp.getResourceBundle();
             const file = path.join(RHMI_RES, 'dyn_' + RUN_TAG + '_w' + spawnId + '_' + (st.n++ % 4) + '.png');
             const t0 = Date.now(), png = frame.png(), t1 = Date.now();
@@ -419,7 +422,7 @@ class Widget {
             await this.comp.setValue(Number(spawnId), cell, rb.getResourceHandle(file), 'Asset');
             this.timing.png += t1 - t0; this.timing.push += Date.now() - t1;
             if (!st.lastPush) log.info('widget ' + spawnId + ': first image in ' + (Date.now() - t0) + ' ms');
-            st.lastPx = Buffer.from(px); st.lastPush = Date.now();
+            st.lastPx = Buffer.from(px); st.lastPush = Date.now(); st.lastCell = cell;
             st.live = st.live.filter((f) => f !== file).concat([file]);
             while (st.live.length > 2) rb.destroyResourceHandles([st.live.shift()]).catch(() => {});
         };
