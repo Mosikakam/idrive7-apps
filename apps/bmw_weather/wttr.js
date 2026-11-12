@@ -1,6 +1,6 @@
 'use strict';
 
-// Convert wttr.in's documented format=j1 response to the fields drawn by Weather.
+// Convert wttr.in's smaller format=j2 response to the fields drawn by Weather.
 function value(v) {
     const n = parseFloat(v);
     return isFinite(n) ? n : null;
@@ -44,7 +44,7 @@ function convert(response) {
             return all;
         }, []);
         daily.time.push(day.date);
-        daily.weather_code.push(code(noon.weatherCode));
+        daily.weather_code.push(hours.length ? code(noon.weatherCode) : null);
         daily.temperature_2m_max.push(value(day.maxtempC));
         daily.temperature_2m_min.push(value(day.mintempC));
         daily.precipitation_probability_max.push(precip.length ? Math.max.apply(null, precip) : null);

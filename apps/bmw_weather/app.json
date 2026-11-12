@@ -2,7 +2,7 @@
   "id": "bmw_weather",
   "title": "Weather",
   "description": "Current weather and a five-day forecast, refreshed over the MGU Internet Uplink.",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "mguInternet": true,
   "vendor": "custom",
   "loggingId": "OA9W",
