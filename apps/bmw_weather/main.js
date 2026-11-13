@@ -13,17 +13,7 @@ mgu.run({
         // MainApp may start the process for the home widget without opening its screen.
         // Keep weather fetching and widget drawing alive in that case as well.
         if (bg.widget) {
-            const sent = Object.create(null);
-            bg.widget.onChange(() => { Object.keys(sent).forEach((id) => { delete sent[id]; }); });
-            bg.widget.loop(2, (inst) => {
-                const snap = model.snapshot();
-                const summary = weather.widgetSummary(snap);
-                if (sent[inst.spawnId] !== summary) {
-                    sent[inst.spawnId] = summary;
-                    bg.widget.set(inst.spawnId, 'TextRecordings', summary, 'Text');
-                }
-                return weather.drawWidget(bg, snap);
-            });
+            bg.widget.loop(2, () => weather.drawWidget(model.snapshot()));
         }
         return model;
     },

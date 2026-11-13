@@ -10,9 +10,15 @@ const widgetCanvas = new ScaledCanvas(W, H, 2);
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
 
+function weatherError(message, code = 'EWEATHER') {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
 function requestJson(hostname, path, lookup) {
     return new Promise((resolve, reject) => {
-        let phase = 'DNS', finished = false, deadline, tcpDeadline;
+        let phase = 'разрешение имени DNS', finished = false, deadline, tcpDeadline;
         function complete(err, value) {
             if (finished) return;
             finished = true;
@@ -23,11 +29,9 @@ function requestJson(hostname, path, lookup) {
         function tracedLookup(hostname, options, callback) {
             lookup(hostname, options, (err, address, family) => {
                 if (!err) {
-                    phase = 'TCP connection';
+                    phase = 'подключение по TCP';
                     tcpDeadline = setTimeout(() => {
-                        const failure = new Error(hostname + ' TCP connection timed out');
-                        failure.code = 'EWEATHERTCP';
-                        req.destroy(failure);
+                        req.destroy(weatherError('Тайм-аут подключения по TCP', 'EWEATHERTCP'));
                     }, 15000);
                 }
                 callback(err, address, family);
@@ -36,48 +40,49 @@ function requestJson(hostname, path, lookup) {
         // MGU runs Node.js 8. The (url, options, callback) overload needs Node.js 10.9+.
         const req = https.get({ hostname, path, lookup: tracedLookup,
             headers: { 'User-Agent': 'BMW-MGU-Weather/1.0', 'Accept': 'application/json' } }, (res) => {
-            phase = 'response body 0B';
+            phase = 'получение данных (0 байт)';
             let body = '';
             res.setEncoding('utf8');
             res.on('data', (chunk) => {
                 body += chunk;
-                phase = 'response body ' + body.length + 'B';
-                if (body.length > 200000) req.destroy(new Error('Weather response too large'));
+                phase = 'получение данных (' + body.length + ' симв.)';
+                if (body.length > 200000) req.destroy(weatherError('Ответ сервиса слишком большой'));
             });
             res.on('end', () => {
-                if (res.statusCode < 200 || res.statusCode >= 300) return complete(new Error('Weather service HTTP ' + res.statusCode));
-                try { complete(null, JSON.parse(body)); } catch (e) { complete(e); }
+                if (res.statusCode < 200 || res.statusCode >= 300)
+                    return complete(weatherError('Сервис вернул HTTP ' + res.statusCode));
+                try { complete(null, JSON.parse(body)); }
+                catch (e) { complete(weatherError('Некорректный ответ сервиса')); }
             });
             res.on('error', complete);
         });
         req.on('socket', (socket) => {
-            socket.on('connect', () => { clearTimeout(tcpDeadline); phase = 'TLS handshake'; });
-            socket.on('secureConnect', () => { phase = 'HTTP response'; });
+            socket.on('connect', () => { clearTimeout(tcpDeadline); phase = 'установка защищённого соединения'; });
+            socket.on('secureConnect', () => { phase = 'ожидание ответа'; });
         });
-        req.setTimeout(12000, () => req.destroy(new Error('Weather idle timeout during ' + phase)));
-        deadline = setTimeout(() => req.destroy(new Error('Weather total timeout during ' + phase)), 25000);
+        req.setTimeout(12000, () => req.destroy(weatherError('Тайм-аут ожидания. Этап — ' + phase)));
+        deadline = setTimeout(() => req.destroy(weatherError('Тайм-аут запроса. Этап — ' + phase)), 25000);
         req.on('error', complete);
     });
 }
 
 function failureText(e) {
-    if (!e) return 'unknown error';
-    if (e.code === 'EWEATHERTCP') return 'TCP timeout';
-    if (/^EUPLINK/.test(e.code || '')) return e.message;
-    return String(e.code || e.message || e).replace(/^Weather service /, '');
+    const code = e && e.code;
+    if (/^(EWEATHER|EUPLINK)|^(EDNSTIMEOUT|ENODNS)$/.test(code || '')) return e.message;
+    return code ? 'Ошибка сети (' + code + ')' : 'Не удалось получить данные о погоде';
 }
 
 const DESCRIPTIONS = {
-    0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Fog', 48: 'Freezing fog',
-    51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 56: 'Freezing drizzle', 57: 'Freezing drizzle',
-    61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Freezing rain', 67: 'Freezing rain',
-    71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains', 80: 'Rain showers', 81: 'Showers',
-    82: 'Heavy showers', 85: 'Snow showers', 86: 'Heavy snow showers', 95: 'Thunderstorm',
-    96: 'Thunderstorm', 99: 'Thunderstorm'
+    0: 'Ясно', 1: 'Преимущественно ясно', 2: 'Переменная облачность', 3: 'Пасмурно', 45: 'Туман',
+    48: 'Морозный туман', 51: 'Слабая морось', 53: 'Морось', 55: 'Сильная морось',
+    56: 'Ледяная морось', 57: 'Ледяная морось', 61: 'Небольшой дождь', 63: 'Дождь', 65: 'Сильный дождь',
+    66: 'Ледяной дождь', 67: 'Ледяной дождь', 71: 'Небольшой снег', 73: 'Снег', 75: 'Сильный снег',
+    77: 'Снежная крупа', 80: 'Кратковременный дождь', 81: 'Ливень', 82: 'Сильный ливень',
+    85: 'Снегопад', 86: 'Сильный снегопад', 95: 'Гроза', 96: 'Гроза', 99: 'Гроза'
 };
 
 function number(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
-function describe(code) { return DESCRIPTIONS[code] || 'Weather'; }
+function describe(code) { return DESCRIPTIONS[code] || 'Погода'; }
 function temp(v, unit) {
     if (number(v) === null) return '--°';
     const n = unit === 'f' ? v * 9 / 5 + 32 : v;
@@ -85,7 +90,7 @@ function temp(v, unit) {
 }
 
 function createModel(ctx, log) {
-    let data = null, error = 'Waiting for weather', detail = '', updated = 0;
+    let data = null, error = 'Загрузка погоды…', detail = '', updated = 0;
     let source = '';
     let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
     let lastAttempt = 0, refreshing = false;
@@ -105,12 +110,12 @@ function createModel(ctx, log) {
         try {
             const forecast = wttr.convert(await requestJson('wttr.is', '/' + lat + ',' + lon + '?format=j2', lookup));
             data = forecast; updated = Date.now(); error = ''; detail = ''; source = 'wttr.is';
-            log.info('weather updated from ' + source);
+            log.info('Погода обновлена через ' + source);
         } catch (e) {
-            error = 'Weather unavailable';
-            detail = (/^EUPLINK/.test(e.code || '') ? '' : 'wttr.is ') + failureText(e);
+            error = 'Погода недоступна';
+            detail = failureText(e);
             detail = detail.slice(0, 90);
-            log.warn('weather: ' + detail + '; ' + (e.stack || e));
+            log.warn(detail + '\n' + (e.stack || e));
         } finally { refreshing = false; }
     }
     const timer = setInterval(() => { if (Date.now() - lastAttempt >= refreshMs) refresh(); }, 60000);
@@ -121,16 +126,12 @@ function createModel(ctx, log) {
     };
 }
 
-function widgetSummary(snap) {
-    if (!snap.data) return snap.detail ? 'Weather: ' + snap.detail : 'Weather: loading';
-    const current = snap.data.current;
-    return snap.error ? 'Weather: offline, last ' + temp(current.temperature_2m, snap.unit)
-        : 'Weather: ' + temp(current.temperature_2m, snap.unit) + ' ' + describe(current.weather_code);
-}
+function isRain(code) { return code >= 51 && code <= 67 || code >= 80 && code <= 82 || code >= 95; }
+function isSnow(code) { return code >= 71 && code <= 77 || code === 85 || code === 86; }
 
 function icon(cv, code, x, y, scale, phase) {
-    const rain = code >= 51 && code <= 67 || code >= 80 && code <= 82 || code >= 95;
-    const snow = code >= 71 && code <= 77 || code === 85 || code === 86;
+    const rain = isRain(code);
+    const snow = isSnow(code);
     const cloudy = code !== 0 && code !== 1;
     const sun = code <= 2;
     if (sun) {
@@ -169,65 +170,88 @@ function frame(cv, w, h) {
     return cv;
 }
 
-function drawWidget(ctx, snap) {
-    const cv = frame(widgetCanvas, W, H), d = snap.data, now = Date.now() / 1000;
-    cv.text('WEATHER', 36, 49, 14, '#9eafba', { font: 'bold', spacing: 1 });
+function fittedSize(cv, text, size, available) {
+    const width = cv.textWidth(text, size);
+    return width > available ? size * available / width : size;
+}
+
+function widgetIcon(cv, code, now) {
+    const x = 116, y = 126;
+    if (code === 0 || code === 1) {
+        const yellow = '#f4c15b';
+        const pulse = Math.sin(now * 1.6);
+        cv.arc(x, y, 30 + pulse * 2, 39 + pulse * 2, 0, 360, yellow);
+        for (let i = 0; i < 8; i++) {
+            const angle = i * Math.PI / 4 + pulse * 0.1;
+            const dx = Math.cos(angle), dy = Math.sin(angle);
+            const radius = 76 + pulse * 2;
+            cv.line(x + 54 * dx, y + 54 * dy, x + radius * dx, y + radius * dy, 8, yellow);
+        }
+        return;
+    }
+    const scale = 3.35, drift = Math.sin(now * 1.2) * 5;
+    const middle = isRain(code) || isSnow(code) ? 43 : 34;
+    icon(cv, code, x - 31 * scale + drift, y - middle * scale, scale, now);
+}
+
+function drawWidget(snap, now = Date.now() / 1000) {
+    const cv = widgetCanvas.clear('#050505'), d = snap.data;
     if (!d) {
-        cv.text(snap.error || 'Loading...', 36, 100, 18, '#e6edf2', { font: 'bold' });
-        cv.text(snap.detail || 'Internet Uplink', 36, 130, 13, '#91a2ad');
+        cv.text(snap.error || 'Загрузка погоды…', W / 2, H / 2, 23, '#e6edf2',
+            { font: 'bold', align: 'center' });
         return cv.canvas;
     }
     const c = d.current, daily = d.daily;
-    icon(cv, c.weather_code, 35, 49, 1.0, now);
-    cv.text(temp(c.temperature_2m, snap.unit), 113, 102, 44, '#f2f5f6', { font: 'light' });
-    cv.text(describe(c.weather_code), 36, 131, 16, '#d9e1e6');
-    cv.text('Feels ' + temp(c.apparent_temperature, snap.unit) + '  Wind ' + Math.round(c.wind_speed_10m) + ' km/h', 36, 153, 12, '#9eafb9');
-    cv.line(36, 164, W - 36, 164, 1, '#33434e');
-    const days = daily.time || [];
-    for (let i = 0; i < Math.min(3, days.length); i++) {
-        const x = 37 + i * 105;
-        const day = new Date(days[i] + 'T12:00:00');
-        const label = i === 0 ? 'TODAY' : ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][day.getDay()];
-        cv.text(label, x, 184, 11, '#8fa1ac', { font: 'bold' });
-        cv.text(temp(daily.temperature_2m_max[i], snap.unit), x, 209, 17, '#edf2f5', { font: 'bold' });
-        cv.text(temp(daily.temperature_2m_min[i], snap.unit), x + 41, 209, 15, '#92a3ad');
+    const left = 211, right = W - 36;
+    const condition = describe(c.weather_code);
+    widgetIcon(cv, c.weather_code, now);
+    cv.text(temp(c.temperature_2m, snap.unit), right, 113, 68, '#f2f5f6', { font: 'light', align: 'right' });
+    cv.text(condition, right, 143, fittedSize(cv, condition, 20, right - left), '#cbd8de', { align: 'right' });
+    if (daily.time.length) {
+        const range = temp(daily.temperature_2m_max[0], snap.unit) + ' / ' + temp(daily.temperature_2m_min[0], snap.unit);
+        cv.line(left, 162, right, 162, 1, '#344650');
+        cv.text(snap.error ? 'РАНЕЕ' : 'СЕГОДНЯ', left, 187, 12, '#93a6b2', { font: 'bold' });
+        cv.text(range, right, 187, 16, '#edf4f7', { align: 'right' });
     }
-    cv.text(snap.error ? 'Offline' : snap.source, 344, 49, 11, '#71838e', { align: 'right' });
     return cv.canvas;
 }
 
 function drawScreen(ctx, snap) {
     const cv = frame(ctx.canvas(1600, 520), 1600, 520), d = snap.data, now = Date.now() / 1000;
-    cv.text('WEATHER', 58, 84, 22, '#9eafba', { font: 'bold', spacing: 2 });
+    cv.text('ПОГОДА', 58, 84, 22, '#9eafba', { font: 'bold', spacing: 2 });
     if (!d) {
-        cv.text(snap.error || 'Loading weather…', 60, 190, 38, '#e6edf2', { font: 'bold' });
-        cv.text(snap.detail || 'Waiting for Internet Uplink', 62, 238, 20, '#9eafb9');
+        cv.text(snap.error || 'Загрузка погоды…', 60, 190, 38, '#e6edf2', { font: 'bold' });
+        cv.text(snap.detail || 'Ожидание подключения к интернету', 62, 238, 20, '#9eafb9');
         return cv;
     }
     const c = d.current, daily = d.daily;
     icon(cv, c.weather_code, 62, 104, 2.3, now);
     cv.text(temp(c.temperature_2m, snap.unit), 250, 232, 92, '#f3f6f7', { font: 'light' });
     cv.text(describe(c.weather_code), 62, 358, 32, '#e1e8ec');
-    cv.text('Feels ' + temp(c.apparent_temperature, snap.unit) + '     Humidity ' + Math.round(c.relative_humidity_2m) + '%     Wind ' + Math.round(c.wind_speed_10m) + ' km/h', 62, 408, 22, '#9eafb9');
+    cv.text('Ощущается ' + temp(c.apparent_temperature, snap.unit) + '     Влажность ' +
+        Math.round(c.relative_humidity_2m) + '%     Ветер ' + Math.round(c.wind_speed_10m) + ' км/ч', 62, 408, 22, '#9eafb9');
     const days = daily.time || [];
     for (let i = 0; i < Math.min(5, days.length); i++) {
         const x = 740 + i * 164;
         const day = new Date(days[i] + 'T12:00:00');
-        const label = i === 0 ? 'TODAY' : ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][day.getDay()];
+        const label = i === 0 ? 'СЕГОДНЯ' : ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'][day.getDay()];
         cv.roundRect(x, 112, 148, 276, 12, '#192832');
         cv.text(label, x + 18, 150, 17, '#91a3ad', { font: 'bold' });
         if (daily.weather_code[i] !== null) {
             icon(cv, daily.weather_code[i], x + 28, 173, 1.2, now + i);
-            cv.text(describe(daily.weather_code[i]), x + 16, 275, 15, '#d9e1e6');
+            const condition = describe(daily.weather_code[i]);
+            cv.text(condition, x + 16, 275, fittedSize(cv, condition, 15, 116), '#d9e1e6');
         }
         cv.text(temp(daily.temperature_2m_max[i], snap.unit), x + 18, 332, 26, '#f0f4f6', { font: 'bold' });
         cv.text(temp(daily.temperature_2m_min[i], snap.unit), x + 78, 332, 23, '#9eafb9');
         if (number(daily.precipitation_probability_max[i]) !== null)
-            cv.text('Precip ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
+            cv.text('Осадки ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
     }
-    cv.text((snap.error ? 'Offline: ' + snap.detail : snap.source) + '  •  Updated ' + new Date(snap.updated).toLocaleTimeString(),
-        1000, 468, 15, '#7f929e');
+    const updated = new Date(snap.updated);
+    const time = String(updated.getHours()).padStart(2, '0') + ':' + String(updated.getMinutes()).padStart(2, '0');
+    const status = snap.error ? 'Без сети. ' + snap.detail : snap.source;
+    cv.text(status + '  /  Обновлено в ' + time, 1510, 468, 15, '#7f929e', { align: 'right' });
     return cv;
 }
 
-module.exports = { createModel, widgetSummary, drawWidget, drawScreen };
+module.exports = { createModel, drawWidget, drawScreen };
