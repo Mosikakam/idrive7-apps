@@ -12,11 +12,12 @@ const largeTile = {
     text: { left: 211, right: 348, temperatureY: 113, temperatureSize: 68,
         conditionY: 143, conditionSize: 20, ruleY: 162, forecastY: 187, labelSize: 12, rangeSize: 16 },
 };
-// The X3 G01 screen photos put the small picture slot close to 3:1.
+// The photos from the X3 G01 show that the 3:1 image still leaves side gaps.
+const SMALL_TILE_WIDTH = 816;
 const smallTile = {
-    canvas: new ScaledCanvas(768, H, 1.5),
-    iconX: 116, iconY: 134, iconScale: 1.23,
-    text: { left: 273, right: 736, temperatureY: 124, temperatureSize: 110,
+    canvas: new ScaledCanvas(SMALL_TILE_WIDTH, H, 1.5),
+    iconX: 120, iconY: 134, iconScale: 1.23,
+    text: { left: 273, right: SMALL_TILE_WIDTH - 32, temperatureY: 124, temperatureSize: 110,
         conditionY: 169, conditionSize: 36, ruleY: 185, forecastY: 224, labelSize: 22, rangeSize: 28 },
 };
 let smallTileBackground;
