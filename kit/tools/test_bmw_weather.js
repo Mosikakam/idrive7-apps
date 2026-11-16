@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.9');
+assert.strictEqual(pkg.version, '1.0.10');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -96,9 +96,14 @@ https.get = function (opts, callback) {
         assert.strictEqual(model.snapshot().data.current.temperature_2m, -3);
         assert.strictEqual(model.snapshot().error, '');
         const widget = weather.drawWidget(model.snapshot());
+        const small = weather.drawWidget(model.snapshot(), true);
         assert.strictEqual(widget.w, 768);
         assert.strictEqual(widget.h, 512);
         assert.ok(widget.png().length > 1000);
+        const smallPng = small.png();
+        assert.strictEqual(smallPng.readUInt32BE(16), 1008, 'compact tile PNG must be wide');
+        assert.strictEqual(smallPng.readUInt32BE(20), 384);
+        assert.notStrictEqual(small, widget, 'tile sizes must not share a mutable canvas');
         const screen = weather.drawScreen(ctx, model.snapshot());
         assert.strictEqual(screen.w, 1600);
         assert.ok(screen.png().length > 1000);
@@ -128,8 +133,8 @@ https.get = function (opts, callback) {
         const snapshot = model.snapshot();
         for (const code of [0, 3, 61, 71]) {
             snapshot.data.current.weather_code = code;
-            const first = weather.drawWidget(snapshot, 0).png();
-            assert.ok(!first.equals(weather.drawWidget(snapshot, 0.75).png()), 'animated weather code ' + code);
+            const first = weather.drawWidget(snapshot, true, 0).png();
+            assert.ok(!first.equals(weather.drawWidget(snapshot, true, 0.75).png()), 'animated weather code ' + code);
         }
         // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
         let impl, widgetDraw, calls = 0;
@@ -141,7 +146,7 @@ https.get = function (opts, callback) {
                 return { run: (entry) => { impl = entry; } };
             if (parent && parent.filename === mainPath && request === './weather')
                 return { createModel() { calls++; return fakeModel; },
-                    drawWidget() { return { image: true }; }, drawScreen() { return {}; } };
+                    drawWidget(snapshot, small) { return { small }; }, drawScreen() { return {}; } };
             return oldLoad.apply(this, arguments);
         };
         try { require(mainPath); } finally { Module._load = oldLoad; }
@@ -150,8 +155,8 @@ https.get = function (opts, callback) {
         assert.strictEqual(await impl.background(bg), fakeModel);
         assert.strictEqual(calls, 1);
         assert.strictEqual(typeof widgetDraw, 'function');
-        assert.deepStrictEqual(widgetDraw({ spawnId: 3, big: false }), { image: true });
-        assert.deepStrictEqual(widgetDraw({ spawnId: 4, big: true }), { image: true });
+        assert.deepStrictEqual(widgetDraw({ spawnId: 3, big: false }), { small: true });
+        assert.deepStrictEqual(widgetDraw({ spawnId: 4, big: true }), { small: false });
         await impl.start({ background: fakeModel, ui: { onClick() {} }, loop() {} });
         console.log('BMW Weather package, forecast and drawing checks passed.');
     } finally {

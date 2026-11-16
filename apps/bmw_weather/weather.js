@@ -4,8 +4,20 @@ const https = require('https');
 const { lookupFor } = require('./uplink');
 const wttr = require('./wttr');
 const { ScaledCanvas } = require('./kit/canvas');
-const W = 384, H = 256;
-const widgetCanvas = new ScaledCanvas(W, H, 2);
+const H = 256;
+const largeTile = {
+    canvas: new ScaledCanvas(384, H, 2),
+    iconX: 116, iconScale: 1,
+    text: { left: 211, right: 348, temperatureY: 113, temperatureSize: 68,
+        conditionY: 143, conditionSize: 20, ruleY: 162, forecastY: 187, labelSize: 12, rangeSize: 16 },
+};
+// Rasterize the wide tile at 1.5x to keep its pixel count close to the large tile.
+const smallTile = {
+    canvas: new ScaledCanvas(672, H, 1.5),
+    iconX: 154, iconScale: 1.16,
+    text: { left: 285, right: 624, temperatureY: 119, temperatureSize: 96,
+        conditionY: 161, conditionSize: 32, ruleY: 180, forecastY: 215, labelSize: 20, rangeSize: 26 },
+};
 // Petropavlovsk-Kamchatsky city centre; these are not vehicle GPS coordinates.
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
@@ -175,43 +187,47 @@ function fittedSize(cv, text, size, available) {
     return width > available ? size * available / width : size;
 }
 
-function widgetIcon(cv, code, now) {
-    const x = 116, y = 126;
+function widgetIcon(cv, code, now, x, factor) {
+    const y = 126;
     if (code === 0 || code === 1) {
         const yellow = '#f4c15b';
         const pulse = Math.sin(now * 1.6);
-        cv.arc(x, y, 30 + pulse * 2, 39 + pulse * 2, 0, 360, yellow);
+        cv.arc(x, y, (30 + pulse * 2) * factor, (39 + pulse * 2) * factor, 0, 360, yellow);
         for (let i = 0; i < 8; i++) {
             const angle = i * Math.PI / 4 + pulse * 0.1;
             const dx = Math.cos(angle), dy = Math.sin(angle);
-            const radius = 76 + pulse * 2;
-            cv.line(x + 54 * dx, y + 54 * dy, x + radius * dx, y + radius * dy, 8, yellow);
+            const start = 54 * factor, radius = (76 + pulse * 2) * factor;
+            cv.line(x + start * dx, y + start * dy, x + radius * dx, y + radius * dy, 8 * factor, yellow);
         }
         return;
     }
-    const scale = 3.35, drift = Math.sin(now * 1.2) * 5;
+    const scale = 3.35 * factor, drift = Math.sin(now * 1.2) * 5;
     const middle = isRain(code) || isSnow(code) ? 43 : 34;
     icon(cv, code, x - 31 * scale + drift, y - middle * scale, scale, now);
 }
 
-function drawWidget(snap, now = Date.now() / 1000) {
-    const cv = widgetCanvas.clear('#050505'), d = snap.data;
+function drawWidget(snap, small = false, now = Date.now() / 1000) {
+    const tile = small ? smallTile : largeTile;
+    const cv = tile.canvas.clear('#050505'), d = snap.data;
     if (!d) {
-        cv.text(snap.error || 'Загрузка погоды…', W / 2, H / 2, 23, '#e6edf2',
+        cv.text(snap.error || 'Загрузка погоды…', cv.w / 2, H / 2, small ? 32 : 23, '#e6edf2',
             { font: 'bold', align: 'center' });
         return cv.canvas;
     }
     const c = d.current, daily = d.daily;
-    const left = 211, right = W - 36;
+    const text = tile.text;
     const condition = describe(c.weather_code);
-    widgetIcon(cv, c.weather_code, now);
-    cv.text(temp(c.temperature_2m, snap.unit), right, 113, 68, '#f2f5f6', { font: 'light', align: 'right' });
-    cv.text(condition, right, 143, fittedSize(cv, condition, 20, right - left), '#cbd8de', { align: 'right' });
+    widgetIcon(cv, c.weather_code, now, tile.iconX, tile.iconScale);
+    cv.text(temp(c.temperature_2m, snap.unit), text.right, text.temperatureY, text.temperatureSize, '#f2f5f6',
+        { font: 'light', align: 'right' });
+    const conditionSize = fittedSize(cv, condition, text.conditionSize, text.right - text.left);
+    cv.text(condition, text.right, text.conditionY, conditionSize, '#cbd8de', { align: 'right' });
     if (daily.time.length) {
         const range = temp(daily.temperature_2m_max[0], snap.unit) + ' / ' + temp(daily.temperature_2m_min[0], snap.unit);
-        cv.line(left, 162, right, 162, 1, '#344650');
-        cv.text(snap.error ? 'РАНЕЕ' : 'СЕГОДНЯ', left, 187, 12, '#93a6b2', { font: 'bold' });
-        cv.text(range, right, 187, 16, '#edf4f7', { align: 'right' });
+        cv.line(text.left, text.ruleY, text.right, text.ruleY, 1, '#344650');
+        cv.text(snap.error ? 'РАНЕЕ' : 'СЕГОДНЯ', text.left, text.forecastY, text.labelSize, '#93a6b2',
+            { font: 'bold' });
+        cv.text(range, text.right, text.forecastY, text.rangeSize, '#edf4f7', { align: 'right' });
     }
     return cv.canvas;
 }
