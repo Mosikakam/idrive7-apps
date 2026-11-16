@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.10');
+assert.strictEqual(pkg.version, '1.0.11');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -101,7 +101,7 @@ https.get = function (opts, callback) {
         assert.strictEqual(widget.h, 512);
         assert.ok(widget.png().length > 1000);
         const smallPng = small.png();
-        assert.strictEqual(smallPng.readUInt32BE(16), 1008, 'compact tile PNG must be wide');
+        assert.strictEqual(smallPng.readUInt32BE(16), 1152, 'compact tile PNG must have a 3:1 aspect ratio');
         assert.strictEqual(smallPng.readUInt32BE(20), 384);
         assert.notStrictEqual(small, widget, 'tile sizes must not share a mutable canvas');
         const screen = weather.drawScreen(ctx, model.snapshot());
