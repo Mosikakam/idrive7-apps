@@ -13,7 +13,7 @@ mgu.run({
         // MainApp may start the process for the home widget without opening its screen.
         // Keep weather fetching and widget drawing alive in that case as well.
         if (bg.widget) {
-            bg.widget.loop(2, () => weather.drawWidget(model.snapshot()));
+            bg.widget.loop(2, (instance) => weather.drawWidget(model.snapshot(), instance.big === false));
         }
         return model;
     },
