@@ -40,7 +40,7 @@ function convert(response) {
     if (current.temperature_2m === null) throw incomplete('Сервис не вернул текущую температуру');
     const daily = { time: [], weather_code: [], temperature_2m_max: [],
         temperature_2m_min: [], precipitation_probability_max: [] };
-    days.slice(0, 5).forEach((day) => {
+    days.slice(0, 3).forEach((day) => {
         const hours = Array.isArray(day.hourly) ? day.hourly : [];
         const noon = hours.filter((h) => Number(h.time) === 1200)[0] || hours[Math.floor(hours.length / 2)] || {};
         const precip = hours.reduce((all, h) => {
