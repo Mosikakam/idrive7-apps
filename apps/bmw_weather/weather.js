@@ -7,16 +7,16 @@ const { ScaledCanvas } = require('./kit/canvas');
 const H = 256;
 const largeTile = {
     canvas: new ScaledCanvas(384, H, 2),
-    iconX: 116, iconScale: 1,
+    iconX: 116, iconY: 126, iconScale: 1,
     text: { left: 211, right: 348, temperatureY: 113, temperatureSize: 68,
         conditionY: 143, conditionSize: 20, ruleY: 162, forecastY: 187, labelSize: 12, rangeSize: 16 },
 };
-// Rasterize the wide tile at 1.5x to keep its pixel count close to the large tile.
+// The X3 G01 screen photos put the small picture slot close to 3:1.
 const smallTile = {
-    canvas: new ScaledCanvas(672, H, 1.5),
-    iconX: 154, iconScale: 1.16,
-    text: { left: 285, right: 624, temperatureY: 119, temperatureSize: 96,
-        conditionY: 161, conditionSize: 32, ruleY: 180, forecastY: 215, labelSize: 20, rangeSize: 26 },
+    canvas: new ScaledCanvas(768, H, 1.5),
+    iconX: 137, iconY: 134, iconScale: 1.23,
+    text: { left: 273, right: 736, temperatureY: 124, temperatureSize: 110,
+        conditionY: 169, conditionSize: 36, ruleY: 185, forecastY: 224, labelSize: 22, rangeSize: 28 },
 };
 // Petropavlovsk-Kamchatsky city centre; these are not vehicle GPS coordinates.
 const LOCATION_LATITUDE = 53.017;
@@ -187,8 +187,7 @@ function fittedSize(cv, text, size, available) {
     return width > available ? size * available / width : size;
 }
 
-function widgetIcon(cv, code, now, x, factor) {
-    const y = 126;
+function widgetIcon(cv, code, now, { iconX: x, iconY: y, iconScale: factor }) {
     if (code === 0 || code === 1) {
         const yellow = '#f4c15b';
         const pulse = Math.sin(now * 1.6);
@@ -217,7 +216,7 @@ function drawWidget(snap, small = false, now = Date.now() / 1000) {
     const c = d.current, daily = d.daily;
     const text = tile.text;
     const condition = describe(c.weather_code);
-    widgetIcon(cv, c.weather_code, now, tile.iconX, tile.iconScale);
+    widgetIcon(cv, c.weather_code, now, tile);
     cv.text(temp(c.temperature_2m, snap.unit), text.right, text.temperatureY, text.temperatureSize, '#f2f5f6',
         { font: 'light', align: 'right' });
     const conditionSize = fittedSize(cv, condition, text.conditionSize, text.right - text.left);
