@@ -208,12 +208,17 @@ function widgetIcon(cv, code, now, { iconX: x, iconY: y, iconScale: factor }) {
 }
 
 function makeSmallTileBackground(width, height) {
-    const edge = '#2c2e31';
-    const transparentEdge = withAlpha(edge, 0);
-    const background = new Canvas(width, height);
-    const horizontalStops = [edge, TILE_CENTER, TILE_CENTER, TILE_CENTER, TILE_CENTER, TILE_CENTER, edge];
-    background.rampRect(0, 0, width, height, 0, horizontalStops);
-    background.gradientRect(0, 0, width, height, [[0, edge], [0.23, transparentEdge], [0.77, transparentEdge], [1, edge]]);
+    const sideColor = '#171819';
+    const sideWidth = Math.round(width / 8);
+    const background = new Canvas(width, height).clear(TILE_CENTER);
+    background.rampRect(0, 0, sideWidth, height, 0, [sideColor, TILE_CENTER]);
+    background.rampRect(width - sideWidth, 0, sideWidth, height, 0, [TILE_CENTER, sideColor]);
+    // Fade out the side bands at their ends so the top, bottom and corners are black.
+    const transparentBlack = withAlpha(TILE_CENTER, 0);
+    background.gradientRect(0, 0, width, height, [
+        [0, TILE_CENTER], [0.04, TILE_CENTER], [0.15, transparentBlack],
+        [0.85, transparentBlack], [0.96, TILE_CENTER], [1, TILE_CENTER],
+    ]);
     return background.d;
 }
 
