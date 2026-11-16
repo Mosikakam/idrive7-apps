@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.12');
+assert.strictEqual(pkg.version, '1.0.13');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -104,6 +104,13 @@ https.get = function (opts, callback) {
         assert.strictEqual(smallPng.readUInt32BE(16), 1152, 'compact tile PNG must have a 3:1 aspect ratio');
         assert.strictEqual(smallPng.readUInt32BE(20), 384);
         assert.notStrictEqual(small, widget, 'tile sizes must not share a mutable canvas');
+        const loading = weather.drawWidget({ data: null }, true);
+        const red = (x, y) => loading.d[(y * loading.w + x) * 4];
+        const sampleRow = loading.h / 2 + 32; // below the loading text
+        const center = red(loading.w / 2, sampleRow);
+        assert.ok(red(0, sampleRow) > red(96, sampleRow) && red(96, sampleRow) > center);
+        assert.ok(red(loading.w - 1, sampleRow) > center);
+        assert.ok(red(loading.w / 2, 0) > center && red(loading.w / 2, loading.h - 1) > center);
         const screen = weather.drawScreen(ctx, model.snapshot());
         assert.strictEqual(screen.w, 1600);
         assert.ok(screen.png().length > 1000);

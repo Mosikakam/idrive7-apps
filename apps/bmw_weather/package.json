@@ -1,6 +1,6 @@
 {
   "name": "bmw_weather",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Виджет погоды для BMW MGU и iDrive 7",
   "mguHmi": ["ID7"],
   "mguInternet": true,

@@ -3,8 +3,9 @@
 const https = require('https');
 const { lookupFor } = require('./uplink');
 const wttr = require('./wttr');
-const { ScaledCanvas } = require('./kit/canvas');
+const { Canvas, ScaledCanvas, withAlpha } = require('./kit/canvas');
 const H = 256;
+const TILE_CENTER = '#050505';
 const largeTile = {
     canvas: new ScaledCanvas(384, H, 2),
     iconX: 116, iconY: 126, iconScale: 1,
@@ -18,6 +19,7 @@ const smallTile = {
     text: { left: 273, right: 736, temperatureY: 124, temperatureSize: 110,
         conditionY: 169, conditionSize: 36, ruleY: 185, forecastY: 224, labelSize: 22, rangeSize: 28 },
 };
+let smallTileBackground;
 // Petropavlovsk-Kamchatsky city centre; these are not vehicle GPS coordinates.
 const LOCATION_LATITUDE = 53.017;
 const LOCATION_LONGITUDE = 158.650;
@@ -205,9 +207,27 @@ function widgetIcon(cv, code, now, { iconX: x, iconY: y, iconScale: factor }) {
     icon(cv, code, x - 31 * scale + drift, y - middle * scale, scale, now);
 }
 
+function makeSmallTileBackground(width, height) {
+    const edge = '#2c2e31';
+    const transparentEdge = withAlpha(edge, 0);
+    const background = new Canvas(width, height);
+    const horizontalStops = [edge, TILE_CENTER, TILE_CENTER, TILE_CENTER, TILE_CENTER, TILE_CENTER, edge];
+    background.rampRect(0, 0, width, height, 0, horizontalStops);
+    background.gradientRect(0, 0, width, height, [[0, edge], [0.23, transparentEdge], [0.77, transparentEdge], [1, edge]]);
+    return background.d;
+}
+
 function drawWidget(snap, small = false, now = Date.now() / 1000) {
     const tile = small ? smallTile : largeTile;
-    const cv = tile.canvas.clear('#050505'), d = snap.data;
+    const cv = tile.canvas, d = snap.data;
+    if (small) {
+        const raster = cv.canvas;
+        // Keep the static gradient out of the animation loop.
+        if (!smallTileBackground) smallTileBackground = makeSmallTileBackground(raster.w, raster.h);
+        raster.d.set(smallTileBackground);
+    } else {
+        cv.clear(TILE_CENTER);
+    }
     if (!d) {
         cv.text(snap.error || 'Загрузка погоды…', cv.w / 2, H / 2, small ? 32 : 23, '#e6edf2',
             { font: 'bold', align: 'center' });
