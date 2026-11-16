@@ -2,7 +2,7 @@
   "id": "bmw_weather",
   "title": "Погода",
   "description": "Текущая погода и прогноз на три дня для iDrive 7.",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "fixedLanguage": "ru",
   "mguInternet": true,
   "vendor": "custom",

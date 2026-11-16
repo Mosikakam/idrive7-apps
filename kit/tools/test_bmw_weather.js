@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.13');
+assert.strictEqual(pkg.version, '1.0.14');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -110,7 +110,12 @@ https.get = function (opts, callback) {
         const center = red(loading.w / 2, sampleRow);
         assert.ok(red(0, sampleRow) > red(96, sampleRow) && red(96, sampleRow) > center);
         assert.ok(red(loading.w - 1, sampleRow) > center);
-        assert.ok(red(loading.w / 2, 0) > center && red(loading.w / 2, loading.h - 1) > center);
+        assert.ok(red(0, sampleRow) < 30, 'side shading should stay dark');
+        for (const y of [0, loading.h - 1]) {
+            for (const x of [0, 96, loading.w / 2, loading.w - 1]) {
+                assert.strictEqual(red(x, y), center, 'top and bottom should stay black across the tile');
+            }
+        }
         const screen = weather.drawScreen(ctx, model.snapshot());
         assert.strictEqual(screen.w, 1600);
         assert.ok(screen.png().length > 1000);
