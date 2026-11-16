@@ -14,7 +14,7 @@ const largeTile = {
 // The X3 G01 screen photos put the small picture slot close to 3:1.
 const smallTile = {
     canvas: new ScaledCanvas(768, H, 1.5),
-    iconX: 137, iconY: 134, iconScale: 1.23,
+    iconX: 116, iconY: 134, iconScale: 1.23,
     text: { left: 273, right: 736, temperatureY: 124, temperatureSize: 110,
         conditionY: 169, conditionSize: 36, ruleY: 185, forecastY: 224, labelSize: 22, rangeSize: 28 },
 };

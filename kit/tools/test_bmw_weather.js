@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.11');
+assert.strictEqual(pkg.version, '1.0.12');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -131,7 +131,7 @@ https.get = function (opts, callback) {
         assert.strictEqual(model.snapshot().data.daily.weather_code[0], null);
         assert.strictEqual(model.snapshot().data.daily.precipitation_probability_max[0], null);
         const snapshot = model.snapshot();
-        for (const code of [0, 3, 61, 71]) {
+        for (const code of [0, 2, 3, 61, 71]) {
             snapshot.data.current.weather_code = code;
             const first = weather.drawWidget(snapshot, true, 0).png();
             assert.ok(!first.equals(weather.drawWidget(snapshot, true, 0.75).png()), 'animated weather code ' + code);
