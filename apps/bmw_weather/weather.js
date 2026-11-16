@@ -3,6 +3,7 @@
 const https = require('https');
 const { lookupFor } = require('./uplink');
 const wttr = require('./wttr');
+const { createCache, validForecast, remainingDays, localTime } = require('./forecast-cache');
 const { Canvas, ScaledCanvas, withAlpha } = require('./kit/canvas');
 const H = 256;
 const TILE_CENTER = '#050505';
@@ -104,16 +105,24 @@ function temp(v, unit) {
     return Math.round(n) + '°';
 }
 
+function shortDate(iso) {
+    return iso.slice(8, 10) + '.' + iso.slice(5, 7);
+}
+
+function temperatureRange(daily, index, unit) {
+    return temp(daily.temperature_2m_max[index], unit) + ' / ' + temp(daily.temperature_2m_min[index], unit);
+}
+
 function createModel(ctx, log) {
-    let data = null, error = 'Загрузка погоды…', detail = '', updated = 0;
-    let source = '';
-    let lat = LOCATION_LATITUDE, lon = LOCATION_LONGITUDE, unit = 'c', refreshMs = 30 * 60000;
+    const cache = createCache(ctx.dataDir, LOCATION_LATITUDE, LOCATION_LONGITUDE, log);
+    let lastForecast = cache.read();
+    let offline = Boolean(lastForecast);
+    let error = lastForecast ? '' : 'Загрузка погоды…', detail = '';
+    let unit = 'c', refreshMs = 30 * 60000;
     let lastAttempt = 0, refreshing = false;
     const lookup = lookupFor(ctx.dataDir);
     function updateSettings() {
         const s = ctx.settings;
-        lat = LOCATION_LATITUDE;
-        lon = LOCATION_LONGITUDE;
         unit = s.get('temperatureUnit') === 'f' ? 'f' : 'c';
         refreshMs = (parseInt(s.get('refreshMinutes'), 10) || 30) * 60000;
     }
@@ -123,10 +132,17 @@ function createModel(ctx, log) {
         refreshing = true;
         lastAttempt = Date.now();
         try {
-            const forecast = wttr.convert(await requestJson('wttr.is', '/' + lat + ',' + lon + '?format=j2', lookup));
-            data = forecast; updated = Date.now(); error = ''; detail = ''; source = 'wttr.is';
-            log.info('Погода обновлена через ' + source);
+            const route = '/' + LOCATION_LATITUDE + ',' + LOCATION_LONGITUDE + '?format=j2';
+            const forecast = wttr.convert(await requestJson('wttr.is', route, lookup));
+            if (!validForecast(forecast)) throw weatherError('Сервис вернул неполный прогноз', 'EWEATHERDATA');
+            lastForecast = { updated: Date.now(), forecast };
+            cache.write(lastForecast);
+            offline = false;
+            error = '';
+            detail = '';
+            log.info('Погода обновлена через wttr.is');
         } catch (e) {
+            offline = true;
             error = 'Погода недоступна';
             detail = failureText(e);
             detail = detail.slice(0, 90);
@@ -137,7 +153,19 @@ function createModel(ctx, log) {
     if (timer.unref) timer.unref();
     return {
         refresh, updateSettings,
-        snapshot() { return { data, error, detail, updated, unit, source }; }
+        snapshot() {
+            const now = Date.now();
+            const today = localTime(now).slice(0, 10);
+            if (!lastForecast) return { data: null, error, detail, unit, today };
+            const { updated, forecast } = lastForecast;
+            const current = updated <= now && localTime(updated).slice(0, 10) === today ? forecast.current : null;
+            const daily = remainingDays(forecast.daily, today);
+            if (!current && !daily.time.length) {
+                return { data: null, error: 'Сохранённый прогноз истёк.',
+                    detail: 'Подключите интернет и обновите погоду.', unit, today };
+            }
+            return { data: { current, daily }, error, detail, updated, unit, today, source: 'wttr.is', saved: offline || !current };
+        },
     };
 }
 
@@ -185,8 +213,8 @@ function frame(cv, w, h) {
     return cv;
 }
 
-function fittedSize(cv, text, size, available) {
-    const width = cv.textWidth(text, size);
+function fittedSize(cv, text, size, available, options) {
+    const width = cv.textWidth(text, size, options);
     return width > available ? size * available / width : size;
 }
 
@@ -239,20 +267,36 @@ function drawWidget(snap, small = false, now = Date.now() / 1000) {
             { font: 'bold', align: 'center' });
         return cv.canvas;
     }
-    const c = d.current, daily = d.daily;
+    const current = d.current, daily = d.daily;
     const text = tile.text;
-    const condition = describe(c.weather_code);
-    widgetIcon(cv, c.weather_code, now, tile);
-    cv.text(temp(c.temperature_2m, snap.unit), text.right, text.temperatureY, text.temperatureSize, '#f2f5f6',
-        { font: 'light', align: 'right' });
+    const index = current ? daily.time.indexOf(snap.today) : 0;
+    const forecastDate = daily.time[index];
+    const range = forecastDate ? temperatureRange(daily, index, snap.unit) : '';
+    const code = current ? current.weather_code : daily.weather_code[index];
+    const value = current ? temp(current.temperature_2m, snap.unit) : range;
+    const condition = code == null ? 'Дневной прогноз'
+        : current ? describe(code) : describe(code) + '  ' + shortDate(forecastDate);
+    if (code != null) {
+        widgetIcon(cv, code, now, tile);
+    } else {
+        cv.text(shortDate(forecastDate), tile.iconX, tile.iconY + 12, 42 * tile.iconScale, '#cbd8de', { align: 'center' });
+    }
+    const temperatureStyle = { font: 'light', align: 'right' };
+    const temperatureSize = current ? text.temperatureSize : fittedSize(cv, value, text.temperatureSize * 0.8,
+        text.right - text.left, temperatureStyle);
+    cv.text(value, text.right, text.temperatureY, temperatureSize, '#f2f5f6', temperatureStyle);
     const conditionSize = fittedSize(cv, condition, text.conditionSize, text.right - text.left);
     cv.text(condition, text.right, text.conditionY, conditionSize, '#cbd8de', { align: 'right' });
-    if (daily.time.length) {
-        const range = temp(daily.temperature_2m_max[0], snap.unit) + ' / ' + temp(daily.temperature_2m_min[0], snap.unit);
+    if (range || snap.saved) {
+        let footer = range;
+        if (!current || !range) {
+            const savedAt = localTime(snap.updated);
+            footer = shortDate(savedAt) + ' ' + savedAt.slice(11, 16);
+        }
         cv.line(text.left, text.ruleY, text.right, text.ruleY, 1, '#344650');
-        cv.text(snap.error ? 'РАНЕЕ' : 'СЕГОДНЯ', text.left, text.forecastY, text.labelSize, '#93a6b2',
+        cv.text(snap.saved ? 'СОХРАНЕНО' : 'СЕГОДНЯ', text.left, text.forecastY, text.labelSize, '#93a6b2',
             { font: 'bold' });
-        cv.text(range, text.right, text.forecastY, text.rangeSize, '#edf4f7', { align: 'right' });
+        cv.text(footer, text.right, text.forecastY, text.rangeSize, '#edf4f7', { align: 'right' });
     }
     return cv.canvas;
 }
@@ -266,16 +310,24 @@ function drawScreen(ctx, snap) {
         return cv;
     }
     const c = d.current, daily = d.daily;
-    icon(cv, c.weather_code, 62, 104, 2.3, now);
-    cv.text(temp(c.temperature_2m, snap.unit), 250, 232, 92, '#f3f6f7', { font: 'light' });
-    cv.text(describe(c.weather_code), 62, 358, 32, '#e1e8ec');
-    cv.text('Ощущается ' + temp(c.apparent_temperature, snap.unit) + '     Влажность ' +
-        Math.round(c.relative_humidity_2m) + '%     Ветер ' + Math.round(c.wind_speed_10m) + ' км/ч', 62, 408, 22, '#9eafb9');
+    if (c) {
+        icon(cv, c.weather_code, 62, 104, 2.3, now);
+        cv.text(temp(c.temperature_2m, snap.unit), 250, 232, 92, '#f3f6f7', { font: 'light' });
+        cv.text(describe(c.weather_code), 62, 358, 32, '#e1e8ec');
+        cv.text('Ощущается ' + temp(c.apparent_temperature, snap.unit) + '     Влажность ' +
+            Math.round(c.relative_humidity_2m) + '%     Ветер ' + Math.round(c.wind_speed_10m) + ' км/ч', 62, 408, 22, '#9eafb9');
+    } else {
+        cv.text('ПРОГНОЗ НА ' + shortDate(daily.time[0]), 62, 179, 28, '#cbd8de', { font: 'bold' });
+        cv.text(temperatureRange(daily, 0, snap.unit), 62, 276, 72, '#f3f6f7', { font: 'light' });
+        const code = daily.weather_code[0];
+        if (code != null) cv.text(describe(code), 62, 358, 32, '#e1e8ec');
+    }
     const days = daily.time || [];
     for (let i = 0; i < Math.min(5, days.length); i++) {
         const x = 740 + i * 164;
-        const day = new Date(days[i] + 'T12:00:00');
-        const label = i === 0 ? 'СЕГОДНЯ' : ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'][day.getDay()];
+        const day = new Date(days[i] + 'T00:00:00Z');
+        const weekday = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'][day.getUTCDay()];
+        const label = days[i] === snap.today ? 'СЕГОДНЯ' : weekday + ' ' + shortDate(days[i]);
         cv.roundRect(x, 112, 148, 276, 12, '#192832');
         cv.text(label, x + 18, 150, 17, '#91a3ad', { font: 'bold' });
         if (daily.weather_code[i] !== null) {
@@ -288,10 +340,11 @@ function drawScreen(ctx, snap) {
         if (number(daily.precipitation_probability_max[i]) !== null)
             cv.text('Осадки ' + daily.precipitation_probability_max[i] + '%', x + 18, 365, 14, '#83c6e9');
     }
-    const updated = new Date(snap.updated);
-    const time = String(updated.getHours()).padStart(2, '0') + ':' + String(updated.getMinutes()).padStart(2, '0');
-    const status = snap.error ? 'Без сети. ' + snap.detail : snap.source;
-    cv.text(status + '  /  Обновлено в ' + time, 1510, 468, 15, '#7f929e', { align: 'right' });
+    const updated = localTime(snap.updated);
+    const status = snap.saved ? 'Сохранено ' : 'Обновлено ';
+    const origin = snap.detail || snap.source;
+    cv.text(origin + '  /  ' + status + shortDate(updated) + ' в ' + updated.slice(11, 16),
+        1510, 468, 15, '#7f929e', { align: 'right' });
     return cv;
 }
 

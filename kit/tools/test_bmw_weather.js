@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.15');
+assert.strictEqual(pkg.version, '1.0.16');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -28,14 +28,20 @@ const Canvas = require(path.join(source, 'javascript', 'kit', 'canvas')).Canvas;
 const wttrSample = {
     current_condition: [{ temp_C: '-3', FeelsLikeC: '-8', humidity: '82',
         windspeedKmph: '18', weatherCode: '326' }],
-    weather: [{ date: '2026-11-10', maxtempC: '0', mintempC: '-6' },
-    { date: '2026-11-11', maxtempC: '1', mintempC: '-5' }]
+    weather: [
+        { date: '2026-11-10', maxtempC: '0', mintempC: '-6' },
+        { date: '2026-11-11', maxtempC: '1', mintempC: '-5' },
+        { date: '2026-11-12', maxtempC: '-1', mintempC: '-7' },
+    ]
 };
 
 let status = 200, requests = 0, simulateTimeout = false, tcpFail = false;
 const originalGet = https.get;
 const originalResolver = dns.Resolver;
+const originalNow = Date.now;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bmw-weather-'));
+let now = Date.parse('2026-11-10T11:59:00Z');
+Date.now = () => now;
 let usedDns;
 dns.Resolver = class {
     setServers(servers) { usedDns = servers; }
@@ -139,15 +145,57 @@ https.get = function (opts, callback) {
         assert.strictEqual(model.snapshot().source, 'wttr.is');
         assert.strictEqual(model.snapshot().data.current.temperature_2m, -3);
         assert.strictEqual(model.snapshot().data.current.weather_code, 71);
-        assert.strictEqual(model.snapshot().data.daily.time.length, 2);
+        assert.strictEqual(model.snapshot().data.daily.time.length, 3);
         assert.strictEqual(model.snapshot().data.daily.weather_code[0], null);
         assert.strictEqual(model.snapshot().data.daily.precipitation_probability_max[0], null);
         const snapshot = model.snapshot();
         for (const code of [0, 2, 3, 61, 71]) {
-            snapshot.data.current.weather_code = code;
-            const first = weather.drawWidget(snapshot, true, 0).png();
-            assert.ok(!first.equals(weather.drawWidget(snapshot, true, 0.75).png()), 'animated weather code ' + code);
+            const frame = Object.assign({}, snapshot, {
+                data: { current: Object.assign({}, snapshot.data.current, { weather_code: code }), daily: snapshot.data.daily }
+            });
+            const first = weather.drawWidget(frame, true, 0).png();
+            assert.ok(!first.equals(weather.drawWidget(frame, true, 0.75).png()), 'animated weather code ' + code);
         }
+        const cachePath = path.join(tempDir, 'forecast-cache.json');
+        const savedForecast = fs.readFileSync(cachePath, 'utf8');
+        wttrSample.weather[0].date = '2026-11-31';
+        await model.refresh();
+        assert.strictEqual(model.snapshot().detail, 'Сервис вернул неполный прогноз');
+        assert.strictEqual(fs.readFileSync(cachePath, 'utf8'), savedForecast, 'failed refresh must preserve the file');
+        wttrSample.weather[0].date = '2026-11-10';
+
+        fs.unlinkSync(path.join(tempDir, 'uplink.json'));
+        const restarted = weather.createModel(ctx, log);
+        assert.strictEqual(restarted.snapshot().saved, true);
+        assert.strictEqual(restarted.snapshot().updated, snapshot.updated);
+        assert.strictEqual(restarted.snapshot().data.current.temperature_2m, -3, 'show cached data before internet is ready');
+        await restarted.refresh();
+        assert.strictEqual(restarted.snapshot().detail, 'Приложение не получило интернет-подключение');
+        assert.strictEqual(fs.readFileSync(cachePath, 'utf8'), savedForecast);
+
+        now = Date.parse('2026-11-10T12:01:00Z');
+        const nextDay = restarted.snapshot();
+        assert.strictEqual(nextDay.today, '2026-11-11');
+        assert.strictEqual(nextDay.data.current, null, 'yesterday’s observation must not become today’s temperature');
+        assert.deepStrictEqual(nextDay.data.daily.time, ['2026-11-11', '2026-11-12']);
+        assert.deepStrictEqual(nextDay.data.daily.temperature_2m_max, [1, -1]);
+        assert.ok(weather.drawWidget(nextDay, true).png().length > 1000);
+        assert.ok(weather.drawScreen(ctx, nextDay).png().length > 1000);
+
+        now = Date.parse('2026-11-11T12:00:00Z');
+        assert.deepStrictEqual(restarted.snapshot().data.daily.time, ['2026-11-12']);
+        now = Date.parse('2026-11-12T12:00:00Z');
+        assert.strictEqual(restarted.snapshot().data, null);
+        assert.strictEqual(restarted.snapshot().error, 'Сохранённый прогноз истёк.');
+        fs.writeFileSync(cachePath, '{');
+        assert.strictEqual(weather.createModel(ctx, log).snapshot().data, null, 'ignore an incomplete cache file');
+
+        fs.writeFileSync(path.join(tempDir, 'uplink.json'), JSON.stringify({ ip: '192.0.2.2', dns: ['192.0.2.1'] }));
+        wttrSample.weather.forEach((day, i) => { day.date = '2026-11-' + (13 + i); });
+        await restarted.refresh();
+        assert.strictEqual(restarted.snapshot().saved, false);
+        assert.strictEqual(restarted.snapshot().data.daily.time[0], '2026-11-13');
+        assert.strictEqual(JSON.parse(fs.readFileSync(cachePath, 'utf8')).updated, now);
         // A widget-only launch never calls start(ctx): its loop must be installed by background(bg).
         let impl, widgetDraw, calls = 0;
         const mainPath = path.join(__dirname, '..', '..', 'apps', 'bmw_weather', 'main.js');
@@ -174,6 +222,7 @@ https.get = function (opts, callback) {
     } finally {
         https.get = originalGet;
         dns.Resolver = originalResolver;
+        Date.now = originalNow;
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 })().catch((e) => { console.error(e); process.exitCode = 1; });
