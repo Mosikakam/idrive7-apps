@@ -12,7 +12,7 @@ const Module = require('module');
 const source = path.join(__dirname, '..', '..', 'dist', 'bmw_weather', 'source');
 const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
 assert.strictEqual(pkg.name, 'bmw_weather');
-assert.strictEqual(pkg.version, '1.0.16');
+assert.strictEqual(pkg.version, '1.0.17');
 assert.strictEqual(pkg.mguInternet, true, 'built package must request Internet Uplink');
 const appSpec = require(path.join(source, 'javascript', 'kit', 'app-spec.json'));
 assert.strictEqual(appSpec.title, 'Погода');
@@ -169,24 +169,44 @@ https.get = function (opts, callback) {
         assert.strictEqual(restarted.snapshot().saved, true);
         assert.strictEqual(restarted.snapshot().updated, snapshot.updated);
         assert.strictEqual(restarted.snapshot().data.current.temperature_2m, -3, 'show cached data before internet is ready');
+        const widgetFrames = (state) => [false, true].map((small) => weather.drawWidget(state, small, 0.75).png());
+        const liveFrames = widgetFrames(snapshot);
+        assert.deepStrictEqual(widgetFrames(restarted.snapshot()), liveFrames, 'cached weather must look the same on both tiles');
+        now -= 60 * 1000;
+        assert.strictEqual(restarted.snapshot().data.current, null, 'a later observation must not appear as live on the full screen');
+        assert.deepStrictEqual(widgetFrames(restarted.snapshot()), liveFrames, 'clock correction must not change the tiles');
         await restarted.refresh();
         assert.strictEqual(restarted.snapshot().detail, 'Приложение не получило интернет-подключение');
         assert.strictEqual(fs.readFileSync(cachePath, 'utf8'), savedForecast);
+        assert.deepStrictEqual(widgetFrames(restarted.snapshot()), liveFrames, 'a network error must not change the tiles');
 
         now = Date.parse('2026-11-10T12:01:00Z');
         const nextDay = restarted.snapshot();
         assert.strictEqual(nextDay.today, '2026-11-11');
-        assert.strictEqual(nextDay.data.current, null, 'yesterday’s observation must not become today’s temperature');
+        assert.strictEqual(nextDay.data.current, null, 'yesterday’s observation must not become live on the full screen');
+        assert.deepStrictEqual(nextDay.lastObservation, snapshot.data.current);
         assert.deepStrictEqual(nextDay.data.daily.time, ['2026-11-11', '2026-11-12']);
         assert.deepStrictEqual(nextDay.data.daily.temperature_2m_max, [1, -1]);
-        assert.ok(weather.drawWidget(nextDay, true).png().length > 1000);
-        assert.ok(weather.drawScreen(ctx, nextDay).png().length > 1000);
+        const sameWeatherToday = Object.assign({}, snapshot, { today: nextDay.today, data: {
+            current: snapshot.data.current, daily: nextDay.data.daily
+        } });
+        assert.deepStrictEqual(widgetFrames(nextDay), widgetFrames(sameWeatherToday), 'on a new day, update the range within the same layout');
+        const labels = [];
+        const canvas = new Canvas(1600, 520);
+        const drawText = canvas.text;
+        canvas.text = function (value, ...args) {
+            labels.push(value);
+            return drawText.call(this, value, ...args);
+        };
+        assert.ok(weather.drawScreen({ canvas: () => canvas }, nextDay).png().length > 1000);
+        assert.ok(labels.some((label) => label.indexOf('Сохранено 10.11 в 23:59') !== -1));
 
         now = Date.parse('2026-11-11T12:00:00Z');
         assert.deepStrictEqual(restarted.snapshot().data.daily.time, ['2026-11-12']);
         now = Date.parse('2026-11-12T12:00:00Z');
         assert.strictEqual(restarted.snapshot().data, null);
-        assert.strictEqual(restarted.snapshot().error, 'Сохранённый прогноз истёк.');
+        assert.strictEqual(restarted.snapshot().error, 'Погода недоступна');
+        assert.ok(restarted.snapshot().detail.indexOf('Сохранённый прогноз истёк.') === 0);
         fs.writeFileSync(cachePath, '{');
         assert.strictEqual(weather.createModel(ctx, log).snapshot().data, null, 'ignore an incomplete cache file');
 
